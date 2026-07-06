@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AetherMind // Multi-Agent Reasoning Engine</title>
+    <!-- Google Fonts: Outfit & JetBrains Mono -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&family=Outfit:wght@100..900&display=swap" rel="stylesheet">
+    <!-- Style Sheets -->
+    <link rel="stylesheet" href="style.css">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Marked Markdown Parser -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <span class="logo-icon"><i data-lucide="cpu"></i></span>
+                    <span class="logo-text">AetherMind</span>
+                </div>
+                <div class="engine-badge">REASONING v2.5</div>
+            </div>
+
+            <div class="sidebar-content">
+                <!-- Configuration Section -->
+                <section class="config-section">
+                    <h3><i data-lucide="settings"></i> Configurations</h3>
+                    
+                    <div class="form-group">
+                        <label for="apiKey">Gemini API Key</label>
+                        <div class="input-with-icon">
+                            <i data-lucide="key" class="field-icon"></i>
+                            <input type="password" id="apiKey" placeholder="Enter API key...">
+                            <button type="button" id="toggleApiKey" class="field-btn" title="Toggle visibility">
+                                <i data-lucide="eye"></i>
+                            </button>
+                        </div>
+                        <span class="field-tip">Stored locally in your browser cache.</span>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="modelSelect">Reasoning Core Model</label>
+                        <div class="select-wrapper">
+                            <i data-lucide="layers" class="field-icon"></i>
+                            <select id="modelSelect">
+                                <option value="gemini-2.5-flash">Gemini 2.5 Flash (Recommended)</option>
+                                <option value="gemini-2.5-pro">Gemini 2.5 Pro (Heavy reasoning)</option>
+                                <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="topologySelect">Agent Graph Topology</label>
+                        <div class="select-wrapper">
+                            <i data-lucide="git-branch" class="field-icon"></i>
+                            <select id="topologySelect">
+                                <option value="cot">Chain of Thought (Linear Logic)</option>
+                                <option value="debate">Critic-Debate (Adversarial Critique)</option>
+                                <option value="tot">Tree of Thoughts (Branching Evaluation)</option>
+                            </select>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- History Section -->
+                <section class="history-section">
+                    <h3><i data-lucide="history"></i> Recent Runs</h3>
+                    <div id="sessionHistory" class="session-list">
+                        <!-- Loaded dynamically -->
+                        <div class="empty-history">No past runs in this session.</div>
+                    </div>
+                </section>
+            </div>
+            
+            <div class="sidebar-footer">
+                <div class="server-status">
+                    <span class="status-indicator online"></span>
+                    <span class="status-label">FastAPI Backend: Online</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Workspace -->
+        <main class="workspace">
+            <header class="workspace-header">
+                <div class="header-title">
+                    <h1>Problem Solver & Reasoner</h1>
+                    <p class="subtitle">Decentralized multi-agent cognitive architecture for complex resolution</p>
+                </div>
+                <div class="header-actions">
+                    <button id="themeToggle" class="btn-icon" title="Toggle Dark/Light Mode">
+                        <i data-lucide="sun"></i>
+                    </button>
+                </div>
+            </header>
+
+            <div class="workspace-content">
+                <!-- Input Panel -->
+                <div class="panel input-panel">
+                    <div class="panel-header">
+                        <div class="panel-title">
+                            <i data-lucide="terminal"></i> Challenge Definition
+                        </div>
+                        <div class="template-selector">
+                            <label for="templateSelect">Templates:</label>
+                            <select id="templateSelect">
+                                <option value="" disabled selected>Select example...</option>
+                                <option value="puzzle">Logic Grid Riddle</option>
+                                <option value="math">Complex Probability Calculation</option>
+                                <option value="code">Refactoring & Performance Optimization</option>
+                                <option value="business">Strategic Product Pivot Analysis</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="panel-body">
+                        <textarea id="problemInput" placeholder="Describe the complex logical puzzle, mathematical proof, algorithm design, or policy critique you want AetherMind to solve..."></textarea>
+                    </div>
+                    <div class="panel-footer">
+                        <button id="runBtn" class="btn-primary">
+                            <span>Execute Reasoning</span>
+                            <i data-lucide="play" class="btn-icon-right"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Execution visualization & Steps panel -->
+                <div class="workspace-grid">
+                    <!-- Left: SVG Visualization -->
+                    <div class="panel viz-panel">
+                        <div class="panel-header">
+                            <div class="panel-title">
+                                <i data-lucide="network"></i> Agent Reasoning Graph
+                            </div>
+                            <div class="viz-status" id="vizStatus">
+                                <span class="viz-status-label">Idle</span>
+                            </div>
+                        </div>
+                        <div class="panel-body viz-container-wrapper">
+                            <div class="viz-container" id="vizContainer">
+                                <svg id="graphSvg" width="100%" height="100%">
+                                    <defs>
+                                        <marker id="arrow" viewBox="0 0 10 10" refX="24" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                                            <path d="M 0 0 L 10 5 L 0 10 z" fill="#3f3f46" />
+                                        </marker>
+                                        <marker id="arrow-active" viewBox="0 0 10 10" refX="24" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                                            <path d="M 0 0 L 10 5 L 0 10 z" fill="#3b82f6" />
+                                        </marker>
+                                    </defs>
+                                    <g id="linksGroup"></g>
+                                    <g id="nodesGroup"></g>
+                                </svg>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right: Selected Step Internal Monologue -->
+                    <div class="panel details-panel">
+                        <div class="panel-header">
+                            <div class="panel-title">
+                                <i data-lucide="glasses"></i> Cognitive Details
+                            </div>
+                        </div>
+                        <div class="panel-body" id="nodeDetailsContent">
+                            <div class="details-placeholder">
+                                <i data-lucide="mouse-pointer-click" class="placeholder-icon"></i>
+                                <p>Click any active reasoning node in the graph to view that agent's step-by-step thinking.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Final Synthesized Solution Panel -->
+                <div class="panel solution-panel hidden" id="solutionPanel">
+                    <div class="panel-header">
+                        <div class="panel-title">
+                            <i data-lucide="award"></i> Final Synthesized Solution
+                        </div>
+                        <div class="panel-actions">
+                            <button id="copySolutionBtn" class="btn-secondary btn-sm">
+                                <i data-lucide="copy"></i> Copy Solution
+                            </button>
+                        </div>
+                    </div>
+                    <div class="panel-body markdown-content" id="solutionContent">
+                        <!-- Loaded dynamically -->
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Script Entry -->
+    <script src="app.js" type="module"></script>
+</body>
+</html>
