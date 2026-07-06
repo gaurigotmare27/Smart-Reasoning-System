@@ -6,7 +6,7 @@
 let currentSteps = {};
 let selectedNodeId = null;
 let currentSessionId = null;
-let isDarkTheme = true;
+let isDarkTheme = false;
 
 // Template definition dictionary
 const TEMPLATES = {

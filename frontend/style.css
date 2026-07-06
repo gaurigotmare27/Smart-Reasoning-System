@@ -1,65 +1,67 @@
 /* =====================================================================
    AetherMind System Stylesheet
    ===================================================================== */
-
 :root {
-    /* Core Color Tokens (Dark Mode Default) */
-    --bg-base: #09090b;
-    --bg-surface: #18181b;
-    --bg-surface-hover: #27272a;
-    --bg-glass: rgba(24, 24, 27, 0.7);
-    --border-color: #27272a;
-    --border-color-focus: #3f3f46;
+    /* Premium Light Mode (Default) */
+    --bg-base: #f8fafc; /* Slate 50 */
+    --bg-surface: #ffffff;
+    --bg-surface-hover: #f1f5f9; /* Slate 100 */
+    --bg-glass: rgba(255, 255, 255, 0.8);
+    --border-color: #e2e8f0; /* Slate 200 */
+    --border-color-focus: #4f46e5; /* Indigo 600 */
     
-    --text-primary: #f4f4f5;
-    --text-secondary: #a1a1aa;
-    --text-muted: #71717a;
+    --text-primary: #0f172a; /* Slate 900 */
+    --text-secondary: #475569; /* Slate 600 */
+    --text-muted: #94a3b8; /* Slate 400 */
     
-    --accent-blue: #3b82f6;
-    --accent-blue-glow: rgba(59, 130, 246, 0.15);
-    --accent-emerald: #10b981;
-    --accent-emerald-glow: rgba(16, 185, 129, 0.15);
+    --accent-blue: #4f46e5; /* Indigo 600 */
+    --accent-blue-glow: rgba(79, 70, 229, 0.08);
+    --accent-emerald: #059669; /* Emerald 600 */
+    --accent-emerald-glow: rgba(5, 150, 105, 0.08);
     
-    --node-thinking-bg: #1e3a8a;
-    --node-thinking-border: #3b82f6;
-    --node-completed-bg: #064e3b;
+    --node-thinking-bg: #f0f2ff; /* Light indigo/blue tint */
+    --node-thinking-border: #6366f1;
+    --node-completed-bg: #ecfdf5; /* Light emerald tint */
     --node-completed-border: #10b981;
     
     --font-sans: 'Outfit', sans-serif;
     --font-mono: 'JetBrains Mono', monospace;
     
     --sidebar-width: 320px;
-    --radius-sm: 6px;
-    --radius-md: 10px;
-    --radius-lg: 16px;
+    --radius-sm: 8px;
+    --radius-md: 12px;
+    --radius-lg: 20px;
     
     --transition-fast: 0.15s ease;
     --transition-normal: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    
+    --panel-shadow: 0 10px 30px -10px rgba(79, 70, 229, 0.06), 0 1px 3px rgba(0, 0, 0, 0.02);
 }
 
-[data-theme="light"] {
-    --bg-base: #f9f9fb;
-    --bg-surface: #ffffff;
-    --bg-surface-hover: #f4f4f5;
-    --bg-glass: rgba(255, 255, 255, 0.85);
-    --border-color: #e4e4e7;
-    --border-color-focus: #d4d4d8;
+[data-theme="dark"] {
+    --bg-base: #090a0f; /* Extra deep dark blue/slate */
+    --bg-surface: #12131a; /* Lighter container dark */
+    --bg-surface-hover: #1a1c26;
+    --bg-glass: rgba(18, 19, 26, 0.8);
+    --border-color: #222433;
+    --border-color-focus: #6366f1; /* Indigo 500 */
     
-    --text-primary: #09090b;
-    --text-secondary: #52525b;
-    --text-muted: #a1a1aa;
+    --text-primary: #f8fafc;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
     
-    --accent-blue: #2563eb;
-    --accent-blue-glow: rgba(37, 99, 235, 0.08);
-    --accent-emerald: #059669;
-    --accent-emerald-glow: rgba(5, 150, 105, 0.08);
+    --accent-blue: #6366f1; /* Indigo 500 */
+    --accent-blue-glow: rgba(99, 102, 241, 0.15);
+    --accent-emerald: #10b981;
+    --accent-emerald-glow: rgba(16, 185, 129, 0.15);
     
-    --node-thinking-bg: #dbeafe;
-    --node-thinking-border: #3b82f6;
-    --node-completed-bg: #d1fae5;
+    --node-thinking-bg: #1b1e36;
+    --node-thinking-border: #6366f1;
+    --node-completed-bg: #0b2e20;
     --node-completed-border: #10b981;
+    
+    --panel-shadow: 0 10px 40px -10px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
-
 /* =====================================================================
    Base Reset
    ===================================================================== */
@@ -160,16 +162,16 @@ input, select, textarea, button {
 }
 
 .logo-text {
-    font-weight: 700;
-    font-size: 1.25rem;
-    letter-spacing: -0.025em;
-    background: linear-gradient(135deg, #ffffff 40%, #a1a1aa 100%);
+    font-weight: 800;
+    font-size: 1.3rem;
+    letter-spacing: -0.03em;
+    background: linear-gradient(135deg, #4f46e5 20%, #0f172a 80%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
 }
 
-[data-theme="light"] .logo-text {
-    background: linear-gradient(135deg, #09090b 40%, #71717a 100%);
+[data-theme="dark"] .logo-text {
+    background: linear-gradient(135deg, #ffffff 40%, #94a3b8 100%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
 }
@@ -388,6 +390,13 @@ input, select, textarea, button {
 .status-indicator.online {
     background-color: var(--accent-emerald);
     box-shadow: 0 0 8px var(--accent-emerald);
+    animation: statusPulse 2s infinite ease-in-out;
+}
+
+@keyframes statusPulse {
+    0% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.25); opacity: 0.7; }
+    100% { transform: scale(1); opacity: 1; }
 }
 
 /* =====================================================================
@@ -465,17 +474,19 @@ input, select, textarea, button {
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+    box-shadow: var(--panel-shadow);
+    transition: box-shadow var(--transition-normal), border-color var(--transition-normal);
 }
 
 .panel-header {
-    padding: 15px 20px;
+    padding: 16px 24px;
     border-bottom: 1px solid var(--border-color);
     display: flex;
     align-items: center;
     justify-content: space-between;
-    font-weight: 600;
-    font-size: 0.9rem;
+    font-weight: 700;
+    font-size: 0.95rem;
+    background: linear-gradient(to bottom, var(--bg-surface), var(--bg-base));
 }
 
 .panel-title {
