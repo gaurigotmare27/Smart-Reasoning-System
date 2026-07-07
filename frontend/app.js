@@ -7,6 +7,7 @@ let currentSteps = {};
 let selectedNodeId = null;
 let currentSessionId = null;
 let isDarkTheme = false;
+let eventSource = null;
 
 // Template definition dictionary
 const TEMPLATES = {
@@ -55,6 +56,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const templateSelect = document.getElementById("templateSelect");
     const problemInput = document.getElementById("problemInput");
     const runBtn = document.getElementById("runBtn");
+    const cancelBtn = document.getElementById("cancelBtn");
     
     // Status & Output panels
     const vizStatus = document.getElementById("vizStatus");
@@ -130,6 +132,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Run Engine Trigger
     runBtn.addEventListener("click", () => startReasoningProcess());
+    if (cancelBtn) {
+        cancelBtn.addEventListener("click", () => cancelReasoningProcess());
+    }
 
     // Load History sessions
     loadRecentSessions();
@@ -212,6 +217,7 @@ document.addEventListener("DOMContentLoaded", () => {
         // Setup UI State
         runBtn.disabled = true;
         runBtn.innerHTML = `<span>Thinking...</span> <i data-lucide="loader" class="animate-spin btn-icon-right"></i>`;
+        if (cancelBtn) cancelBtn.classList.remove("hidden");
         lucide.createIcons();
         solutionPanel.classList.add("hidden");
         vizStatus.innerText = "Connecting...";
@@ -230,7 +236,7 @@ document.addEventListener("DOMContentLoaded", () => {
             model: model
         });
 
-        const eventSource = new EventSource(`/api/reason?${params.toString()}`);
+        eventSource = new EventSource(`/api/reason?${params.toString()}`);
 
         eventSource.onmessage = (event) => {
             try {
@@ -303,9 +309,32 @@ document.addEventListener("DOMContentLoaded", () => {
         };
     }
 
+    function cancelReasoningProcess() {
+        if (eventSource) {
+            eventSource.close();
+            eventSource = null;
+        }
+        vizStatus.innerText = "Canceled by User";
+        vizStatus.className = "viz-status error";
+        
+        // Mark thinking steps back to idle
+        for (const [id, step] of Object.entries(currentSteps)) {
+            if (step.status === "thinking") {
+                step.status = "idle";
+            }
+        }
+        
+        renderGraph();
+        if (selectedNodeId) {
+            renderNodeDetails(selectedNodeId);
+        }
+        enableUI();
+    }
+
     function enableUI() {
         runBtn.disabled = false;
         runBtn.innerHTML = `<span>Execute Reasoning</span> <i data-lucide="play" class="btn-icon-right"></i>`;
+        if (cancelBtn) cancelBtn.classList.add("hidden");
         lucide.createIcons();
     }
 
@@ -454,15 +483,21 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const step = currentSteps[nodeId];
         
+        // Calculate performance metrics
+        const wordCount = step.output ? step.output.trim().split(/\s+/).filter(w => w.length > 0).length : 0;
+        const speed = step.duration > 0 && wordCount > 0 ? (wordCount / step.duration).toFixed(1) : null;
+        
         let headerHtml = `
             <div style="border-bottom: 1px solid var(--border-color); padding-bottom: 12px; margin-bottom: 15px;">
                 <h2 style="font-size: 1.15rem; display: flex; align-items: center; gap: 8px;">
                     <span class="status-indicator ${step.status === 'completed' ? 'online' : ''}" style="background-color: ${step.status === 'completed' ? 'var(--accent-emerald)' : 'var(--accent-blue)'}"></span>
                     ${step.label}
                 </h2>
-                <div style="display: flex; gap: 15px; font-size: 0.75rem; color: var(--text-secondary); font-family: var(--font-mono); margin-top: 5px;">
+                <div style="display: flex; flex-wrap: wrap; gap: 15px; font-size: 0.75rem; color: var(--text-secondary); font-family: var(--font-mono); margin-top: 5px;">
                     <span>STATUS: ${step.status.toUpperCase()}</span>
-                    ${step.status === 'completed' ? `<span>DURATION: ${step.duration}s</span>` : ''}
+                    <span>DURATION: ${step.duration}s</span>
+                    ${wordCount > 0 ? `<span>WORDS: ${wordCount}</span>` : ''}
+                    ${speed ? `<span>SPEED: ${speed} w/s</span>` : ''}
                 </div>
             </div>
         `;

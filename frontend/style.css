@@ -652,10 +652,21 @@ input, select, textarea, button {
 
 .svg-edge.active {
     stroke: var(--accent-blue);
+    stroke-dasharray: 8, 4;
+    animation: edgeFlow 1s linear infinite;
 }
 
 .svg-edge.completed {
     stroke: var(--accent-emerald);
+}
+
+@keyframes edgeFlow {
+    from {
+        stroke-dashoffset: 12;
+    }
+    to {
+        stroke-dashoffset: 0;
+    }
 }
 
 .svg-node {

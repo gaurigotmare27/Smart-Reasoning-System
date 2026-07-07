@@ -122,7 +122,11 @@
                     <div class="panel-body">
                         <textarea id="problemInput" placeholder="Describe the complex logical puzzle, mathematical proof, algorithm design, or policy critique you want AetherMind to solve..."></textarea>
                     </div>
-                    <div class="panel-footer">
+                    <div class="panel-footer" style="display: flex; gap: 10px; justify-content: flex-end;">
+                        <button id="cancelBtn" class="btn-secondary hidden" type="button">
+                            <span>Cancel Execution</span>
+                            <i data-lucide="square" class="btn-icon-right" style="color: #ef4444; width: 14px; height: 14px;"></i>
+                        </button>
                         <button id="runBtn" class="btn-primary">
                             <span>Execute Reasoning</span>
                             <i data-lucide="play" class="btn-icon-right"></i>
