@@ -1,5 +1,5 @@
 /* =====================================================================
-   AetherMind Frontend Application Logic
+   AetherMind Frontend Application Logic Overhaul
    ===================================================================== */
 
 // State variables
@@ -8,6 +8,8 @@ let selectedNodeId = null;
 let currentSessionId = null;
 let isDarkTheme = false;
 let eventSource = null;
+let startTime = null;
+let telemetryTimer = null;
 
 // Template definition dictionary
 const TEMPLATES = {
@@ -42,6 +44,24 @@ const TOPOLOGY_COORDINATES = {
     }
 };
 
+// Friendly Lucide Icon mappings for agent steps
+function getIconName(id) {
+    const icons = {
+        deconstruct: "split",
+        thinking: "git-commit",
+        proposal: "file-edit",
+        critique: "shield-alert",
+        revision: "rotate-cw",
+        path_a: "trending-up",
+        path_b: "cpu",
+        path_c: "zap",
+        evaluation: "bar-chart-2",
+        expansion: "git-branch",
+        synthesis: "award"
+    };
+    return icons[id] || "help-circle";
+}
+
 // =====================================================================
 // Dom Elements
 // =====================================================================
@@ -60,12 +80,20 @@ document.addEventListener("DOMContentLoaded", () => {
     
     // Status & Output panels
     const vizStatus = document.getElementById("vizStatus");
-    const solutionPanel = document.getElementById("solutionPanel");
     const solutionContent = document.getElementById("solutionContent");
     const copySolutionBtn = document.getElementById("copySolutionBtn");
     const detailsContent = document.getElementById("nodeDetailsContent");
     const themeToggle = document.getElementById("themeToggle");
     const sessionHistory = document.getElementById("sessionHistory");
+    
+    // Telemetry DOM elements
+    const statNodes = document.getElementById("statNodes");
+    const statTime = document.getElementById("statTime");
+    const statSpeed = document.getElementById("statSpeed");
+
+    // Tab buttons & Panes
+    const tabBtns = document.querySelectorAll(".workspace-tabs .tab-btn");
+    const tabPanes = document.querySelectorAll(".workspace-content .tab-pane");
 
     // =====================================================================
     // Initialization & Event Listeners
@@ -100,6 +128,13 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     // Handle template changes
+    templateSelect.addEventListener("click", (e) => {
+        const val = e.target.value;
+        if (TEMPLATES[val]) {
+            problemInput.value = TEMPLATES[val];
+        }
+    });
+    // Fallback for option selection changes
     templateSelect.addEventListener("change", (e) => {
         const val = e.target.value;
         if (TEMPLATES[val]) {
@@ -130,6 +165,14 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     });
 
+    // Wire up tab switches
+    tabBtns.forEach(btn => {
+        btn.addEventListener("click", () => {
+            const tabId = btn.getAttribute("data-tab");
+            switchTab(tabId);
+        });
+    });
+
     // Run Engine Trigger
     runBtn.addEventListener("click", () => startReasoningProcess());
     if (cancelBtn) {
@@ -146,6 +189,26 @@ document.addEventListener("DOMContentLoaded", () => {
     // =====================================================================
     // Main Functions
     // =====================================================================
+    
+    function switchTab(tabId) {
+        tabBtns.forEach(btn => {
+            if (btn.getAttribute("data-tab") === tabId) {
+                btn.classList.add("active");
+            } else {
+                btn.classList.remove("active");
+            }
+        });
+        tabPanes.forEach(pane => {
+            if (pane.id === `pane-${tabId}`) {
+                pane.classList.add("active");
+            } else {
+                pane.classList.remove("active");
+            }
+        });
+        if (tabId === "flow") {
+            renderGraph();
+        }
+    }
     
     function resetGraph() {
         const topology = topologySelect.value;
@@ -164,6 +227,12 @@ document.addEventListener("DOMContentLoaded", () => {
                 parent_ids: getParentIds(topology, id)
             };
         }
+        
+        // Reset telemetry labels
+        statNodes.innerText = `0 / ${Object.keys(coords).length}`;
+        statTime.innerText = "0.0s";
+        statSpeed.innerText = "0 w/s";
+        
         renderGraph();
         renderNodeDetails(null);
     }
@@ -171,14 +240,14 @@ document.addEventListener("DOMContentLoaded", () => {
     function getFriendlyLabel(id) {
         const labels = {
             deconstruct: "Problem Deconstruction",
-            thinking: "Logic Chain thinking",
-            proposal: "Initial Draft Proposal",
+            thinking: "Logic Chain",
+            proposal: "Draft Proposal",
             critique: "Ruthless Critique",
             revision: "Refined Revision",
             path_a: "Branch A: Analytical",
             path_b: "Branch B: Algorithmic",
             path_c: "Branch C: Heuristic",
-            evaluation: "Alternative Evaluation",
+            evaluation: "Alternative Eval",
             expansion: "Branch Execution",
             synthesis: "Solution Synthesis"
         };
@@ -203,6 +272,29 @@ document.addEventListener("DOMContentLoaded", () => {
         return [];
     }
 
+    function updateTelemetry() {
+        if (!startTime) return;
+        const steps = Object.values(currentSteps);
+        
+        // Completed count
+        const completedCount = steps.filter(s => s.status === "completed").length;
+        statNodes.innerText = `${completedCount} / ${steps.length}`;
+        
+        // Speed (words per second)
+        const elapsed = (Date.now() - startTime) / 1000;
+        let totalWords = 0;
+        steps.forEach(step => {
+            if (step.output) {
+                totalWords += step.output.trim().split(/\s+/).filter(w => w.length > 0).length;
+            }
+        });
+        
+        if (elapsed > 0) {
+            const wps = Math.round(totalWords / elapsed);
+            statSpeed.innerText = `${wps} w/s`;
+        }
+    }
+
     function startReasoningProcess() {
         const problem = problemInput.value.trim();
         const apiKey = apiKeyInput.value.trim();
@@ -214,17 +306,36 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
         }
 
-        // Setup UI State
+        // Setup UI State & Tabs
         runBtn.disabled = true;
         runBtn.innerHTML = `<span>Thinking...</span> <i data-lucide="loader" class="animate-spin btn-icon-right"></i>`;
         if (cancelBtn) cancelBtn.classList.remove("hidden");
         lucide.createIcons();
-        solutionPanel.classList.add("hidden");
+        
+        // Reset output markdown block placeholder
+        solutionContent.innerHTML = `
+            <div class="solution-placeholder">
+                <i data-lucide="loader" class="animate-spin placeholder-icon"></i>
+                <p>Generating final synthesized solution...</p>
+            </div>
+        `;
+        
         vizStatus.innerText = "Connecting...";
         vizStatus.className = "viz-status active";
         
         resetGraph();
+        switchTab("flow"); // Automatically redirect to graph flow view
         
+        // Setup Telemetry Running Timer
+        startTime = Date.now();
+        telemetryTimer = setInterval(() => {
+            if (startTime) {
+                const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+                statTime.innerText = `${elapsed}s`;
+                updateTelemetry();
+            }
+        }, 100);
+
         // Generate a new Session ID
         currentSessionId = "session_" + Date.now();
 
@@ -257,26 +368,27 @@ document.addEventListener("DOMContentLoaded", () => {
 
                     vizStatus.innerText = `Agent: ${step.label} (${step.status})`;
 
-                    // If a node is active, select it automatically if nothing else is selected
+                    // Auto select thinking node
                     if (step.status === "thinking" || (step.status === "completed" && !selectedNodeId)) {
                         selectedNodeId = step.id;
                     }
 
                     renderGraph();
+                    updateTelemetry();
                     
                     // Render details panel if active
                     if (selectedNodeId === step.id) {
                         renderNodeDetails(step.id);
                     }
                 } else if (data.event === "done") {
+                    cleanupTelemetry();
                     vizStatus.innerText = "Completed";
                     vizStatus.className = "viz-status completed";
                     eventSource.close();
                     
                     // Render Final synthesized output
                     solutionContent.innerHTML = marked.parse(data.final_output);
-                    solutionPanel.classList.remove("hidden");
-                    solutionPanel.scrollIntoView({ behavior: "smooth" });
+                    switchTab("solution"); // Auto swap to final output view
 
                     // Auto select the synthesis node
                     selectedNodeId = "synthesis";
@@ -289,10 +401,11 @@ document.addEventListener("DOMContentLoaded", () => {
                     // Reset UI
                     enableUI();
                 } else if (data.event === "error") {
+                    cleanupTelemetry();
                     eventSource.close();
                     vizStatus.innerText = "Error encountered";
                     vizStatus.className = "viz-status error";
-                    detailsContent.innerHTML = `<div class="details-placeholder"><i data-lucide="alert-triangle" style="color: #ef4444; width: 48px; height: 48px;"></i><p style="color: #ef4444;">Error: ${data.message}</p></div>`;
+                    detailsContent.innerHTML = `<div class="details-placeholder"><i data-lucide="alert-triangle" style="color: var(--accent-rose); width: 48px; height: 48px;"></i><p style="color: var(--accent-rose); margin-top: 10px;">Error: ${data.message}</p></div>`;
                     lucide.createIcons();
                     enableUI();
                 }
@@ -303,13 +416,22 @@ document.addEventListener("DOMContentLoaded", () => {
 
         eventSource.onerror = (err) => {
             console.error("SSE Connection Failed:", err);
+            cleanupTelemetry();
             eventSource.close();
             vizStatus.innerText = "Disconnected";
             enableUI();
         };
     }
 
+    function cleanupTelemetry() {
+        if (telemetryTimer) {
+            clearInterval(telemetryTimer);
+            telemetryTimer = null;
+        }
+    }
+
     function cancelReasoningProcess() {
+        cleanupTelemetry();
         if (eventSource) {
             eventSource.close();
             eventSource = null;
@@ -339,23 +461,27 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // =====================================================================
-    // SVG Graph Rendering Core
+    // SVG Graph Rendering Core (using HTML nodes inside foreignObject)
     // =====================================================================
     function renderGraph() {
         const svg = document.getElementById("graphSvg");
         const nodesGroup = document.getElementById("nodesGroup");
         const linksGroup = document.getElementById("linksGroup");
 
+        if (!svg || !nodesGroup || !linksGroup) return;
+
         // Clear existing SVG shapes
         nodesGroup.innerHTML = "";
         linksGroup.innerHTML = "";
 
-        const width = svg.clientWidth || 500;
-        const height = svg.clientHeight || 400;
+        const width = svg.clientWidth || 600;
+        const height = svg.clientHeight || 450;
         const topology = topologySelect.value;
         const coords = TOPOLOGY_COORDINATES[topology];
 
-        // Draw Links/Edges
+        if (!coords) return;
+
+        // Draw Links/Edges as smooth cubic bezier curves
         for (const [id, step] of Object.entries(currentSteps)) {
             const startCoord = coords[id];
             if (!startCoord) continue;
@@ -381,22 +507,23 @@ document.addEventListener("DOMContentLoaded", () => {
                         markerId = "arrow-active";
                     } else if (step.status === "completed") {
                         linkClass += " completed";
+                        markerId = "arrow-completed";
                     }
                 }
 
-                // Draw line path
-                const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
-                line.setAttribute("x1", parentX);
-                line.setAttribute("y1", parentY);
-                line.setAttribute("x2", startX);
-                line.setAttribute("y2", startY);
-                line.setAttribute("class", linkClass);
-                line.setAttribute("marker-end", `url(#${markerId})`);
-                linksGroup.appendChild(line);
+                // Draw Bezier curve connection path
+                const midY = (parentY + startY) / 2;
+                const pathData = `M ${parentX} ${parentY} C ${parentX} ${midY}, ${startX} ${midY}, ${startX} ${startY}`;
+
+                const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                path.setAttribute("d", pathData);
+                path.setAttribute("class", linkClass);
+                path.setAttribute("marker-end", `url(#${markerId})`);
+                linksGroup.appendChild(path);
             });
         }
 
-        // Draw Nodes
+        // Draw Nodes using HTML templates inside foreignObject
         for (const [id, step] of Object.entries(currentSteps)) {
             const coord = coords[id];
             if (!coord) continue;
@@ -405,65 +532,64 @@ document.addEventListener("DOMContentLoaded", () => {
             const y = (coord.y / 100) * height;
 
             // Dimensions for node rectangular box
-            const rectW = 120;
-            const rectH = 45;
+            const rectW = 160;
+            const rectH = 50;
 
             // Create Node Group wrapper
             const nodeG = document.createElementNS("http://www.w3.org/2000/svg", "g");
-            let nodeClass = "svg-node";
-            if (step.status === "thinking") nodeClass += " thinking";
-            if (step.status === "completed") nodeClass += " completed";
-            if (selectedNodeId === id) nodeClass += " selected";
-            
-            nodeG.setAttribute("class", nodeClass);
             nodeG.setAttribute("transform", `translate(${x}, ${y})`);
-            nodeG.style.transformOrigin = "center";
             
-            // Add click interaction
-            nodeG.addEventListener("click", () => {
+            // Build the foreignObject
+            const foreignObject = document.createElementNS("http://www.w3.org/2000/svg", "foreignObject");
+            foreignObject.setAttribute("x", -rectW / 2);
+            foreignObject.setAttribute("y", -rectH / 2);
+            foreignObject.setAttribute("width", rectW);
+            foreignObject.setAttribute("height", rectH);
+            foreignObject.setAttribute("class", "node-foreign-object");
+
+            // Configure state classes
+            let cardClass = `node-card ${step.status}`;
+            if (selectedNodeId === id) cardClass += " selected";
+
+            // Format status label
+            let statusLabelText = step.status;
+            if (step.status === "thinking") {
+                statusLabelText = "thinking...";
+            } else if (step.status === "completed") {
+                statusLabelText = `${step.duration}s`;
+            }
+
+            const iconName = getIconName(id);
+
+            const containerDiv = document.createElement("div");
+            containerDiv.className = cardClass;
+            containerDiv.innerHTML = `
+                <div class="node-inner">
+                    <div class="node-icon">
+                        <i data-lucide="${iconName}"></i>
+                    </div>
+                    <div class="node-content">
+                        <div class="node-label" title="${step.label}">${step.label}</div>
+                        <div class="node-status">${statusLabelText}</div>
+                    </div>
+                </div>
+            `;
+
+            // Click interaction inside foreignObject
+            containerDiv.addEventListener("click", (e) => {
+                e.stopPropagation();
                 selectedNodeId = id;
                 renderGraph(); // Trigger redrawing to apply selection style
                 renderNodeDetails(id);
             });
 
-            // Rectangle shape box
-            const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-            rect.setAttribute("x", -rectW / 2);
-            rect.setAttribute("y", -rectH / 2);
-            rect.setAttribute("width", rectW);
-            rect.setAttribute("height", rectH);
-            rect.setAttribute("class", "svg-node-bg");
-            nodeG.appendChild(rect);
-
-            // Title text label
-            const textTitle = document.createElementNS("http://www.w3.org/2000/svg", "text");
-            textTitle.setAttribute("x", 0);
-            textTitle.setAttribute("y", -3);
-            textTitle.setAttribute("class", "svg-node-title");
-            
-            // Text clipping or wrapping logic
-            let shortLabel = step.label;
-            if (shortLabel.length > 18) shortLabel = shortLabel.substring(0, 16) + "...";
-            textTitle.textContent = shortLabel;
-            nodeG.appendChild(textTitle);
-
-            // Metadata text label (status/duration)
-            const textMeta = document.createElementNS("http://www.w3.org/2000/svg", "text");
-            textMeta.setAttribute("x", 0);
-            textMeta.setAttribute("y", 12);
-            textMeta.setAttribute("class", "svg-node-meta");
-            
-            if (step.status === "thinking") {
-                textMeta.textContent = "THINKING...";
-            } else if (step.status === "completed") {
-                textMeta.textContent = `${step.duration}s`;
-            } else {
-                textMeta.textContent = "IDLE";
-            }
-            nodeG.appendChild(textMeta);
-
+            foreignObject.appendChild(containerDiv);
+            nodeG.appendChild(foreignObject);
             nodesGroup.appendChild(nodeG);
         }
+
+        // Render Lucide icons loaded inside SVG elements
+        lucide.createIcons();
     }
 
     // =====================================================================
@@ -561,7 +687,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
                     // Delete button click
                     const deleteBtn = item.querySelector(".session-delete-btn");
-                    deleteBtn.addEventListener("click", () => {
+                    deleteBtn.addEventListener("click", (e) => {
+                        e.stopPropagation();
                         deleteSession(session.id);
                     });
 
@@ -626,14 +753,12 @@ document.addEventListener("DOMContentLoaded", () => {
         
         // Render Final solution
         solutionContent.innerHTML = marked.parse(session.final_output);
-        solutionPanel.classList.remove("hidden");
+        switchTab("solution");
         
         // Auto select final node
         selectedNodeId = "synthesis";
         renderGraph();
         renderNodeDetails("synthesis");
-        
-        solutionPanel.scrollIntoView({ behavior: "smooth" });
     }
 
     // Redraw on window resize

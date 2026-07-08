@@ -7,15 +7,18 @@
     <!-- Google Fonts: Outfit & JetBrains Mono -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&family=Outfit:wght@100..900&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght=0,100..800;1,100..800&family=Outfit:wght@100..900&display=swap" rel="stylesheet">
     <!-- Style Sheets -->
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=3">
     <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
     <!-- Marked Markdown Parser -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
+    <!-- Particle Ambient Background -->
+    <div class="particle-bg" id="particleBg"></div>
+
     <div class="app-container">
         <!-- Sidebar -->
         <aside class="sidebar">
@@ -94,6 +97,21 @@
                     <h1>Problem Solver & Reasoner</h1>
                     <p class="subtitle">Decentralized multi-agent cognitive architecture for complex resolution</p>
                 </div>
+                <!-- Telemetry Dashboard -->
+                <div class="telemetry-dashboard">
+                    <div class="telemetry-card">
+                        <span class="telemetry-value" id="statNodes">0 / 0</span>
+                        <span class="telemetry-label">Agents Done</span>
+                    </div>
+                    <div class="telemetry-card">
+                        <span class="telemetry-value" id="statTime">0.0s</span>
+                        <span class="telemetry-label">Total Latency</span>
+                    </div>
+                    <div class="telemetry-card">
+                        <span class="telemetry-value" id="statSpeed">0 w/s</span>
+                        <span class="telemetry-label">Word Velocity</span>
+                    </div>
+                </div>
                 <div class="header-actions">
                     <button id="themeToggle" class="btn-icon" title="Toggle Dark/Light Mode">
                         <i data-lucide="moon"></i>
@@ -134,66 +152,86 @@
                     </div>
                 </div>
 
-                <!-- Execution visualization & Steps panel -->
-                <div class="workspace-grid">
-                    <!-- Left: SVG Visualization -->
-                    <div class="panel viz-panel">
-                        <div class="panel-header">
-                            <div class="panel-title">
-                                <i data-lucide="network"></i> Agent Reasoning Graph
-                            </div>
-                            <div class="viz-status" id="vizStatus">
-                                <span class="viz-status-label">Idle</span>
-                            </div>
-                        </div>
-                        <div class="panel-body viz-container-wrapper">
-                            <div class="viz-container" id="vizContainer">
-                                <svg id="graphSvg" width="100%" height="100%">
-                                    <defs>
-                                        <marker id="arrow" viewBox="0 0 10 10" refX="24" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                                            <path d="M 0 0 L 10 5 L 0 10 z" fill="#3f3f46" />
-                                        </marker>
-                                        <marker id="arrow-active" viewBox="0 0 10 10" refX="24" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                                            <path d="M 0 0 L 10 5 L 0 10 z" fill="#3b82f6" />
-                                        </marker>
-                                    </defs>
-                                    <g id="linksGroup"></g>
-                                    <g id="nodesGroup"></g>
-                                </svg>
-                            </div>
-                        </div>
-                    </div>
+                <!-- Tabs Selector -->
+                <div class="workspace-tabs">
+                    <button class="tab-btn active" data-tab="flow">
+                        <i data-lucide="network"></i> Reasoning Flow Graph
+                    </button>
+                    <button class="tab-btn" data-tab="solution" id="solutionTabBtn">
+                        <i data-lucide="award"></i> Synthesized Solution
+                    </button>
+                </div>
 
-                    <!-- Right: Selected Step Internal Monologue -->
-                    <div class="panel details-panel">
-                        <div class="panel-header">
-                            <div class="panel-title">
-                                <i data-lucide="glasses"></i> Cognitive Details
+                <!-- Tab: Flow Graph & Details -->
+                <div class="tab-pane active" id="pane-flow">
+                    <div class="workspace-grid">
+                        <!-- Left: SVG Visualization -->
+                        <div class="panel viz-panel">
+                            <div class="panel-header">
+                                <div class="panel-title">
+                                    <i data-lucide="network"></i> Agent Reasoning Graph
+                                </div>
+                                <div class="viz-status" id="vizStatus">
+                                    <span class="viz-status-label">Idle</span>
+                                </div>
+                            </div>
+                            <div class="panel-body viz-container-wrapper">
+                                <div class="viz-container" id="vizContainer">
+                                    <svg id="graphSvg" width="100%" height="100%">
+                                        <defs>
+                                            <marker id="arrow" viewBox="0 0 10 10" refX="28" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                                                <path d="M 0 0 L 10 5 L 0 10 z" fill="#3f3f46" />
+                                            </marker>
+                                            <marker id="arrow-active" viewBox="0 0 10 10" refX="28" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                                                <path d="M 0 0 L 10 5 L 0 10 z" fill="#3b82f6" />
+                                            </marker>
+                                            <marker id="arrow-completed" viewBox="0 0 10 10" refX="28" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                                                <path d="M 0 0 L 10 5 L 0 10 z" fill="#10b981" />
+                                            </marker>
+                                        </defs>
+                                        <g id="linksGroup"></g>
+                                        <g id="nodesGroup"></g>
+                                    </svg>
+                                </div>
                             </div>
                         </div>
-                        <div class="panel-body" id="nodeDetailsContent">
-                            <div class="details-placeholder">
-                                <i data-lucide="mouse-pointer-click" class="placeholder-icon"></i>
-                                <p>Click any active reasoning node in the graph to view that agent's step-by-step thinking.</p>
+
+                        <!-- Right: Selected Step Internal Monologue -->
+                        <div class="panel details-panel">
+                            <div class="panel-header">
+                                <div class="panel-title">
+                                    <i data-lucide="glasses"></i> Cognitive Details
+                                </div>
+                            </div>
+                            <div class="panel-body" id="nodeDetailsContent">
+                                <div class="details-placeholder">
+                                    <i data-lucide="mouse-pointer-click" class="placeholder-icon"></i>
+                                    <p>Click any active reasoning node in the graph to view that agent's step-by-step thinking.</p>
+                                </div>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- Final Synthesized Solution Panel -->
-                <div class="panel solution-panel hidden" id="solutionPanel">
-                    <div class="panel-header">
-                        <div class="panel-title">
-                            <i data-lucide="award"></i> Final Synthesized Solution
+                <!-- Tab: Solution markdown display -->
+                <div class="tab-pane" id="pane-solution">
+                    <div class="panel solution-panel">
+                        <div class="panel-header">
+                            <div class="panel-title">
+                                <i data-lucide="award"></i> Final Synthesized Solution
+                            </div>
+                            <div class="panel-actions">
+                                <button id="copySolutionBtn" class="btn-secondary btn-sm">
+                                    <i data-lucide="copy"></i> Copy Solution
+                                </button>
+                            </div>
                         </div>
-                        <div class="panel-actions">
-                            <button id="copySolutionBtn" class="btn-secondary btn-sm">
-                                <i data-lucide="copy"></i> Copy Solution
-                            </button>
+                        <div class="panel-body markdown-content" id="solutionContent">
+                            <div class="solution-placeholder">
+                                <i data-lucide="sparkles" class="placeholder-icon"></i>
+                                <p>The final synthesized solution will appear here once the agent execution is complete.</p>
+                            </div>
                         </div>
-                    </div>
-                    <div class="panel-body markdown-content" id="solutionContent">
-                        <!-- Loaded dynamically -->
                     </div>
                 </div>
             </div>
@@ -201,6 +239,6 @@
     </div>
 
     <!-- Script Entry -->
-    <script src="app.js" type="module"></script>
+    <script src="app.js?v=3" type="module"></script>
 </body>
 </html>
