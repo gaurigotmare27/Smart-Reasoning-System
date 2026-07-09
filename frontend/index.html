@@ -17,7 +17,9 @@
 </head>
 <body>
     <!-- Particle Ambient Background -->
-    <div class="particle-bg" id="particleBg"></div>
+    <div class="particle-bg" id="particleBg">
+        <canvas id="neuralCanvas"></canvas>
+    </div>
 
     <div class="app-container">
         <!-- Sidebar -->
@@ -67,7 +69,43 @@
                                 <option value="cot">Chain of Thought (Linear Logic)</option>
                                 <option value="debate">Critic-Debate (Adversarial Critique)</option>
                                 <option value="tot">Tree of Thoughts (Branching Evaluation)</option>
+                                <option value="ensemble">Ensemble Consensus (Parallel Experts)</option>
+                                <option value="refinement">Self-Correction Loop (Recursive Audit)</option>
                             </select>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Advanced Configuration Section -->
+                <section class="config-section accordion-section">
+                    <button type="button" class="accordion-trigger" id="advSettingsToggle">
+                        <span><i data-lucide="sliders"></i> Developer Settings</span>
+                        <i data-lucide="chevron-down" class="accordion-arrow"></i>
+                    </button>
+                    <div class="accordion-content hidden" id="advSettingsContent">
+                        <div class="form-group" style="margin-top: 12px;">
+                            <label for="tempSlider" style="display: flex; justify-content: space-between;">
+                                <span>Temperature</span>
+                                <span id="tempValue" style="font-family: var(--font-mono); color: var(--accent-blue);">0.4</span>
+                            </label>
+                            <input type="range" id="tempSlider" min="0.0" max="1.0" step="0.05" value="0.4" style="width: 100%; cursor: pointer;">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="customPromptDecon">Deconstruct Prompt Override</label>
+                            <textarea id="customPromptDecon" class="prompt-override-input" placeholder="Override Problem Deconstructor system prompt..."></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="customPromptLogic">Reasoning/Draft Prompt Override</label>
+                            <textarea id="customPromptLogic" class="prompt-override-input" placeholder="Override Reasoning/Draft Agent system prompt..."></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="customPromptCritique">Critique/Eval Prompt Override</label>
+                            <textarea id="customPromptCritique" class="prompt-override-input" placeholder="Override Critique/Evaluation system prompt..."></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="customPromptSynth">Synthesis/Revision Prompt Override</label>
+                            <textarea id="customPromptSynth" class="prompt-override-input" placeholder="Override Synthesis/Revision system prompt..."></textarea>
                         </div>
                     </div>
                 </section>
@@ -176,23 +214,31 @@
                                 </div>
                             </div>
                             <div class="panel-body viz-container-wrapper">
-                                <div class="viz-container" id="vizContainer">
-                                    <svg id="graphSvg" width="100%" height="100%">
-                                        <defs>
-                                            <marker id="arrow" viewBox="0 0 10 10" refX="28" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                                                <path d="M 0 0 L 10 5 L 0 10 z" fill="#3f3f46" />
-                                            </marker>
-                                            <marker id="arrow-active" viewBox="0 0 10 10" refX="28" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                                                <path d="M 0 0 L 10 5 L 0 10 z" fill="#3b82f6" />
-                                            </marker>
-                                            <marker id="arrow-completed" viewBox="0 0 10 10" refX="28" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                                                <path d="M 0 0 L 10 5 L 0 10 z" fill="#10b981" />
-                                            </marker>
-                                        </defs>
+                            <div class="viz-controls">
+                                <button type="button" id="zoomInBtn" class="btn-icon btn-sm" title="Zoom In"><i data-lucide="zoom-in"></i></button>
+                                <button type="button" id="zoomOutBtn" class="btn-icon btn-sm" title="Zoom Out"><i data-lucide="zoom-out"></i></button>
+                                <button type="button" id="zoomFitBtn" class="btn-icon btn-sm" title="Fit Content"><i data-lucide="maximize"></i></button>
+                                <button type="button" id="zoomResetBtn" class="btn-icon btn-sm" title="Reset View"><i data-lucide="refresh-cw"></i></button>
+                            </div>
+                            <div class="viz-container" id="vizContainer">
+                                <svg id="graphSvg" width="100%" height="100%">
+                                    <defs>
+                                        <marker id="arrow" viewBox="0 0 10 10" refX="28" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                                            <path d="M 0 0 L 10 5 L 0 10 z" fill="#3f3f46" />
+                                        </marker>
+                                        <marker id="arrow-active" viewBox="0 0 10 10" refX="28" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                                            <path d="M 0 0 L 10 5 L 0 10 z" fill="#3b82f6" />
+                                        </marker>
+                                        <marker id="arrow-completed" viewBox="0 0 10 10" refX="28" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                                            <path d="M 0 0 L 10 5 L 0 10 z" fill="#10b981" />
+                                        </marker>
+                                    </defs>
+                                    <g id="zoomGroup">
                                         <g id="linksGroup"></g>
                                         <g id="nodesGroup"></g>
-                                    </svg>
-                                </div>
+                                    </g>
+                                </svg>
+                            </div>
                             </div>
                         </div>
 
@@ -220,7 +266,16 @@
                             <div class="panel-title">
                                 <i data-lucide="award"></i> Final Synthesized Solution
                             </div>
-                            <div class="panel-actions">
+                            <div class="panel-actions" style="display: flex; gap: 8px;">
+                                <div class="dropdown-wrapper">
+                                    <button type="button" id="exportBtn" class="btn-secondary btn-sm">
+                                        <i data-lucide="download"></i> Export <i data-lucide="chevron-down" style="width: 12px; height: 12px; margin-left: 2px;"></i>
+                                    </button>
+                                    <div class="dropdown-menu hidden" id="exportDropdown">
+                                        <button type="button" id="exportMarkdownBtn"><i data-lucide="file-text"></i> Markdown Report</button>
+                                        <button type="button" id="exportJsonBtn"><i data-lucide="braces"></i> JSON Dataset</button>
+                                    </div>
+                                </div>
                                 <button id="copySolutionBtn" class="btn-secondary btn-sm">
                                     <i data-lucide="copy"></i> Copy Solution
                                 </button>

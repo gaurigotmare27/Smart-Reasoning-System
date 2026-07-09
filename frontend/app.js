@@ -11,6 +11,14 @@ let eventSource = null;
 let startTime = null;
 let telemetryTimer = null;
 
+// Zoom & Pan state variables
+let zoomScale = 1.0;
+let zoomTranslateX = 0;
+let zoomTranslateY = 0;
+let isDraggingGraph = false;
+let dragStartX = 0;
+let dragStartY = 0;
+
 // Template definition dictionary
 const TEMPLATES = {
     puzzle: "Three people (Alice, Bob, and Charlie) are in a room. One of them always tells the truth, one always lies, and one can either lie or tell the truth. Alice says: 'I am the truth-teller.' Bob says: 'Alice is the liar.' Charlie says: 'Bob is the liar.' Who is who?",
@@ -41,6 +49,21 @@ const TOPOLOGY_COORDINATES = {
         evaluation: { x: 50, y: 60 },
         expansion: { x: 50, y: 78 },
         synthesis: { x: 50, y: 92 }
+    },
+    ensemble: {
+        deconstruct: { x: 50, y: 15 },
+        agent_a: { x: 20, y: 48 },
+        agent_b: { x: 50, y: 48 },
+        agent_c: { x: 80, y: 48 },
+        synthesis: { x: 50, y: 85 }
+    },
+    refinement: {
+        deconstruct: { x: 50, y: 10 },
+        draft: { x: 50, y: 26 },
+        critique_1: { x: 30, y: 44 },
+        revision_1: { x: 70, y: 58 },
+        critique_2: { x: 30, y: 74 },
+        synthesis: { x: 50, y: 90 }
     }
 };
 
@@ -57,7 +80,14 @@ function getIconName(id) {
         path_c: "zap",
         evaluation: "bar-chart-2",
         expansion: "git-branch",
-        synthesis: "award"
+        synthesis: "award",
+        agent_a: "binary",
+        agent_b: "cpu",
+        agent_c: "sparkles",
+        draft: "file-text",
+        critique_1: "shield-alert",
+        revision_1: "refresh-cw",
+        critique_2: "zoom-in"
     };
     return icons[id] || "help-circle";
 }
@@ -71,6 +101,16 @@ document.addEventListener("DOMContentLoaded", () => {
     const toggleApiKeyBtn = document.getElementById("toggleApiKey");
     const modelSelect = document.getElementById("modelSelect");
     const topologySelect = document.getElementById("topologySelect");
+    
+    // Developer configuration fields
+    const tempSlider = document.getElementById("tempSlider");
+    const tempValue = document.getElementById("tempValue");
+    const customPromptDecon = document.getElementById("customPromptDecon");
+    const customPromptLogic = document.getElementById("customPromptLogic");
+    const customPromptCritique = document.getElementById("customPromptCritique");
+    const customPromptSynth = document.getElementById("customPromptSynth");
+    const advSettingsToggle = document.getElementById("advSettingsToggle");
+    const advSettingsContent = document.getElementById("advSettingsContent");
     
     // Inputs & Control
     const templateSelect = document.getElementById("templateSelect");
@@ -95,6 +135,12 @@ document.addEventListener("DOMContentLoaded", () => {
     const tabBtns = document.querySelectorAll(".workspace-tabs .tab-btn");
     const tabPanes = document.querySelectorAll(".workspace-content .tab-pane");
 
+    // Export elements
+    const exportBtn = document.getElementById("exportBtn");
+    const exportDropdown = document.getElementById("exportDropdown");
+    const exportMarkdownBtn = document.getElementById("exportMarkdownBtn");
+    const exportJsonBtn = document.getElementById("exportJsonBtn");
+
     // =====================================================================
     // Initialization & Event Listeners
     // =====================================================================
@@ -109,6 +155,22 @@ document.addEventListener("DOMContentLoaded", () => {
     if (localStorage.getItem("aether_topology")) {
         topologySelect.value = localStorage.getItem("aether_topology");
     }
+    if (localStorage.getItem("aether_temp")) {
+        tempSlider.value = localStorage.getItem("aether_temp");
+        tempValue.innerText = tempSlider.value;
+    }
+    if (localStorage.getItem("aether_prompt_decon")) {
+        customPromptDecon.value = localStorage.getItem("aether_prompt_decon");
+    }
+    if (localStorage.getItem("aether_prompt_logic")) {
+        customPromptLogic.value = localStorage.getItem("aether_prompt_logic");
+    }
+    if (localStorage.getItem("aether_prompt_critique")) {
+        customPromptCritique.value = localStorage.getItem("aether_prompt_critique");
+    }
+    if (localStorage.getItem("aether_prompt_synth")) {
+        customPromptSynth.value = localStorage.getItem("aether_prompt_synth");
+    }
 
     // Save configurations on change
     apiKeyInput.addEventListener("change", () => localStorage.setItem("aether_api_key", apiKeyInput.value));
@@ -116,6 +178,21 @@ document.addEventListener("DOMContentLoaded", () => {
     topologySelect.addEventListener("change", () => {
         localStorage.setItem("aether_topology", topologySelect.value);
         resetGraph();
+    });
+    
+    tempSlider.addEventListener("input", (e) => {
+        tempValue.innerText = e.target.value;
+    });
+    tempSlider.addEventListener("change", () => localStorage.setItem("aether_temp", tempSlider.value));
+    customPromptDecon.addEventListener("change", () => localStorage.setItem("aether_prompt_decon", customPromptDecon.value));
+    customPromptLogic.addEventListener("change", () => localStorage.setItem("aether_prompt_logic", customPromptLogic.value));
+    customPromptCritique.addEventListener("change", () => localStorage.setItem("aether_prompt_critique", customPromptCritique.value));
+    customPromptSynth.addEventListener("change", () => localStorage.setItem("aether_prompt_synth", customPromptSynth.value));
+
+    // Developer Accordion Drawer
+    advSettingsToggle.addEventListener("click", () => {
+        advSettingsToggle.classList.toggle("active");
+        advSettingsContent.classList.toggle("hidden");
     });
 
     // Toggle API Key visibility
@@ -134,7 +211,6 @@ document.addEventListener("DOMContentLoaded", () => {
             problemInput.value = TEMPLATES[val];
         }
     });
-    // Fallback for option selection changes
     templateSelect.addEventListener("change", (e) => {
         const val = e.target.value;
         if (TEMPLATES[val]) {
@@ -165,6 +241,20 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     });
 
+    // Dropdown visibility for Export
+    if (exportBtn && exportDropdown) {
+        exportBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            exportDropdown.classList.toggle("hidden");
+        });
+        document.addEventListener("click", () => {
+            exportDropdown.classList.add("hidden");
+        });
+    }
+
+    exportMarkdownBtn.addEventListener("click", exportMarkdownReport);
+    exportJsonBtn.addEventListener("click", exportJsonDataset);
+
     // Wire up tab switches
     tabBtns.forEach(btn => {
         btn.addEventListener("click", () => {
@@ -182,8 +272,10 @@ document.addEventListener("DOMContentLoaded", () => {
     // Load History sessions
     loadRecentSessions();
 
-    // Initial SVG reset
+    // Initial SVG setup, Zoom handlers and Backdrop
     resetGraph();
+    initSvgZoomPan();
+    initNeuralBackground();
     lucide.createIcons();
 
     // =====================================================================
@@ -233,6 +325,12 @@ document.addEventListener("DOMContentLoaded", () => {
         statTime.innerText = "0.0s";
         statSpeed.innerText = "0 w/s";
         
+        // Reset SVG transformation matrix
+        zoomScale = 1.0;
+        zoomTranslateX = 0;
+        zoomTranslateY = 0;
+        applyZoom();
+
         renderGraph();
         renderNodeDetails(null);
     }
@@ -249,7 +347,14 @@ document.addEventListener("DOMContentLoaded", () => {
             path_c: "Branch C: Heuristic",
             evaluation: "Alternative Eval",
             expansion: "Branch Execution",
-            synthesis: "Solution Synthesis"
+            synthesis: "Solution Synthesis",
+            agent_a: "Analytical Expert",
+            agent_b: "Algorithmic Expert",
+            agent_c: "Creative Expert",
+            draft: "Initial Proposal",
+            critique_1: "Audit Round 1",
+            revision_1: "Revision Round 1",
+            critique_2: "Audit Round 2"
         };
         return labels[id] || id;
     }
@@ -268,6 +373,15 @@ document.addEventListener("DOMContentLoaded", () => {
             if (id === "evaluation") return ["path_a", "path_b", "path_c"];
             if (id === "expansion") return ["evaluation"];
             if (id === "synthesis") return ["expansion"];
+        } else if (topology === "ensemble") {
+            if (id === "agent_a" || id === "agent_b" || id === "agent_c") return ["deconstruct"];
+            if (id === "synthesis") return ["agent_a", "agent_b", "agent_c"];
+        } else if (topology === "refinement") {
+            if (id === "draft") return ["deconstruct"];
+            if (id === "critique_1") return ["draft"];
+            if (id === "revision_1") return ["critique_1"];
+            if (id === "critique_2") return ["revision_1"];
+            if (id === "synthesis") return ["critique_2"];
         }
         return [];
     }
@@ -339,12 +453,17 @@ document.addEventListener("DOMContentLoaded", () => {
         // Generate a new Session ID
         currentSessionId = "session_" + Date.now();
 
-        // Construct EventSource URL
+        // Construct EventSource URL with advanced config parameters
         const params = new URLSearchParams({
             problem: problem,
             topology: topology,
             api_key: apiKey,
-            model: model
+            model: model,
+            temperature: tempSlider.value,
+            prompt_decon: customPromptDecon.value.trim(),
+            prompt_logic: customPromptLogic.value.trim(),
+            prompt_critique: customPromptCritique.value.trim(),
+            prompt_synth: customPromptSynth.value.trim()
         });
 
         eventSource = new EventSource(`/api/reason?${params.toString()}`);
@@ -388,6 +507,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     
                     // Render Final synthesized output
                     solutionContent.innerHTML = marked.parse(data.final_output);
+                    postProcessMarkdown(solutionContent);
                     switchTab("solution"); // Auto swap to final output view
 
                     // Auto select the synthesis node
@@ -644,7 +764,288 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         detailsContent.innerHTML = headerHtml + contentHtml;
+        postProcessMarkdown(detailsContent);
         lucide.createIcons();
+    }
+
+    // =====================================================================
+    // Interactive SVG Zoom & Drag Handlers
+    // =====================================================================
+    function initSvgZoomPan() {
+        const svg = document.getElementById("graphSvg");
+        const zoomGroup = document.getElementById("zoomGroup");
+        if (!svg || !zoomGroup) return;
+
+        svg.addEventListener("wheel", (e) => {
+            e.preventDefault();
+            const zoomFactor = 0.08;
+            if (e.deltaY < 0) {
+                zoomScale = Math.min(zoomScale + zoomFactor, 3.0);
+            } else {
+                zoomScale = Math.max(zoomScale - zoomFactor, 0.4);
+            }
+            applyZoom();
+        }, { passive: false });
+
+        svg.addEventListener("mousedown", (e) => {
+            if (e.button !== 0) return;
+            const target = e.target;
+            if (target.closest(".node-card")) return; // Don't drag if clicking node cards
+
+            isDraggingGraph = true;
+            dragStartX = e.clientX - zoomTranslateX;
+            dragStartY = e.clientY - zoomTranslateY;
+            svg.style.cursor = "grabbing";
+        });
+
+        window.addEventListener("mousemove", (e) => {
+            if (!isDraggingGraph) return;
+            zoomTranslateX = e.clientX - dragStartX;
+            zoomTranslateY = e.clientY - dragStartY;
+            applyZoom();
+        });
+
+        window.addEventListener("mouseup", () => {
+            if (isDraggingGraph) {
+                isDraggingGraph = false;
+                svg.style.cursor = "default";
+            }
+        });
+
+        document.getElementById("zoomInBtn").addEventListener("click", () => {
+            zoomScale = Math.min(zoomScale + 0.25, 3.0);
+            applyZoom();
+        });
+        document.getElementById("zoomOutBtn").addEventListener("click", () => {
+            zoomScale = Math.max(zoomScale - 0.25, 0.4);
+            applyZoom();
+        });
+        document.getElementById("zoomFitBtn").addEventListener("click", () => {
+            zoomScale = 1.0;
+            zoomTranslateX = 0;
+            zoomTranslateY = 0;
+            applyZoom();
+        });
+        document.getElementById("zoomResetBtn").addEventListener("click", () => {
+            zoomScale = 1.0;
+            zoomTranslateX = 0;
+            zoomTranslateY = 0;
+            applyZoom();
+        });
+    }
+
+    function applyZoom() {
+        const zoomGroup = document.getElementById("zoomGroup");
+        if (zoomGroup) {
+            zoomGroup.setAttribute("transform", `translate(${zoomTranslateX}, ${zoomTranslateY}) scale(${zoomScale})`);
+        }
+    }
+
+    // =====================================================================
+    // Interactive Canvas Constellation Backdrop Animation
+    // =====================================================================
+    function initNeuralBackground() {
+        const canvas = document.getElementById("neuralCanvas");
+        if (!canvas) return;
+        const ctx = canvas.getContext("2d");
+        
+        let width = canvas.width = canvas.offsetWidth;
+        let height = canvas.height = canvas.offsetHeight;
+        
+        const dots = [];
+        const maxDots = 70;
+        const connectionDist = 125;
+        let mouse = { x: null, y: null, radius: 160 };
+
+        class Dot {
+            constructor() {
+                this.x = Math.random() * width;
+                this.y = Math.random() * height;
+                this.vx = (Math.random() - 0.5) * 0.45;
+                this.vy = (Math.random() - 0.5) * 0.45;
+                this.radius = Math.random() * 2 + 1.2;
+            }
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                if (this.x < 0 || this.x > width) this.vx *= -1;
+                if (this.y < 0 || this.y > height) this.vy *= -1;
+            }
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = isDarkTheme ? "rgba(99, 102, 241, 0.45)" : "rgba(79, 70, 229, 0.22)";
+                ctx.fill();
+            }
+        }
+
+        for (let i = 0; i < maxDots; i++) {
+            dots.push(new Dot());
+        }
+
+        function animate() {
+            ctx.clearRect(0, 0, width, height);
+            dots.forEach(dot => {
+                dot.update();
+                dot.draw();
+            });
+
+            // Draw line connections between drifting stars
+            for (let i = 0; i < dots.length; i++) {
+                for (let j = i + 1; j < dots.length; j++) {
+                    const dist = Math.hypot(dots[i].x - dots[j].x, dots[i].y - dots[j].y);
+                    if (dist < connectionDist) {
+                        const alpha = (1 - dist / connectionDist) * (isDarkTheme ? 0.15 : 0.08);
+                        ctx.strokeStyle = isDarkTheme 
+                            ? `rgba(99, 102, 241, ${alpha})` 
+                            : `rgba(79, 70, 229, ${alpha})`;
+                        ctx.lineWidth = 1;
+                        ctx.beginPath();
+                        ctx.moveTo(dots[i].x, dots[i].y);
+                        ctx.lineTo(dots[j].x, dots[j].y);
+                        ctx.stroke();
+                    }
+                }
+            }
+
+            // Draw magnetic links to cursor
+            if (mouse.x !== null) {
+                dots.forEach(dot => {
+                    const dist = Math.hypot(dot.x - mouse.x, dot.y - mouse.y);
+                    if (dist < mouse.radius) {
+                        const alpha = (1 - dist / mouse.radius) * (isDarkTheme ? 0.26 : 0.14);
+                        ctx.strokeStyle = isDarkTheme 
+                            ? `rgba(6, 182, 212, ${alpha})` 
+                            : `rgba(37, 99, 235, ${alpha})`;
+                        ctx.beginPath();
+                        ctx.moveTo(dot.x, dot.y);
+                        ctx.lineTo(mouse.x, mouse.y);
+                        ctx.stroke();
+                    }
+                });
+            }
+
+            requestAnimationFrame(animate);
+        }
+
+        window.addEventListener("resize", () => {
+            width = canvas.width = canvas.offsetWidth;
+            height = canvas.height = canvas.offsetHeight;
+        });
+
+        window.addEventListener("mousemove", (e) => {
+            mouse.x = e.clientX;
+            mouse.y = e.clientY;
+        });
+
+        window.addEventListener("mouseleave", () => {
+            mouse.x = null;
+            mouse.y = null;
+        });
+
+        animate();
+    }
+
+    // =====================================================================
+    // Custom Markdown Code blocks post-processor
+    // =====================================================================
+    function postProcessMarkdown(element) {
+        const preElements = element.querySelectorAll("pre");
+        preElements.forEach(pre => {
+            // Check if already processed
+            if (pre.parentNode.classList.contains("code-block-wrapper")) return;
+
+            const code = pre.querySelector("code");
+            const languageClass = code ? code.className : "";
+            let language = "code";
+            if (languageClass.startsWith("language-")) {
+                language = languageClass.replace("language-", "");
+            }
+
+            const codeText = pre.innerText;
+
+            // Build structural elements
+            const wrapper = document.createElement("div");
+            wrapper.className = "code-block-wrapper";
+
+            const header = document.createElement("div");
+            header.className = "code-block-header";
+            header.innerHTML = `
+                <span class="code-lang-label">${language.toUpperCase()}</span>
+                <button class="btn-copy-code"><i data-lucide="copy"></i> Copy</button>
+            `;
+
+            // Insert wrappers
+            pre.parentNode.insertBefore(wrapper, pre);
+            wrapper.appendChild(header);
+            wrapper.appendChild(pre);
+
+            // Bind copy logic
+            header.querySelector(".btn-copy-code").addEventListener("click", (e) => {
+                const btn = e.currentTarget;
+                navigator.clipboard.writeText(codeText).then(() => {
+                    btn.innerHTML = `<i data-lucide="check"></i> Copied!`;
+                    lucide.createIcons();
+                    setTimeout(() => {
+                        btn.innerHTML = `<i data-lucide="copy"></i> Copy`;
+                        lucide.createIcons();
+                    }, 2000);
+                });
+            });
+        });
+        lucide.createIcons();
+    }
+
+    // =====================================================================
+    // Export Data triggers
+    // =====================================================================
+    function exportMarkdownReport() {
+        let md = `# AetherMind Run Export Report\n\n`;
+        md += `**Problem Definition**: ${problemInput.value}\n\n`;
+        md += `- **Topology**: ${topologySelect.value.toUpperCase()}\n`;
+        md += `- **Model**: ${modelSelect.value}\n`;
+        md += `- **Temperature**: ${tempSlider.value}\n`;
+        md += `- **Date**: ${new Date().toLocaleString()}\n\n`;
+        
+        md += `## 1. Agent Reasoning Cycle Logs\n\n`;
+        Object.values(currentSteps).forEach(step => {
+            md += `### [${step.status.toUpperCase()}] ${step.label} (${step.duration}s)\n`;
+            md += `${step.output || "_No logs generated_"}\n\n`;
+            md += `---\n\n`;
+        });
+
+        md += `## 2. Synthesized Solution Output\n\n`;
+        md += `${solutionContent.innerText}\n`;
+
+        downloadBlob(md, `aethermind_report_${Date.now()}.md`, "text/markdown");
+    }
+
+    function exportJsonDataset() {
+        const payload = {
+            problem: problemInput.value,
+            topology: topologySelect.value,
+            model: modelSelect.value,
+            temperature: parseFloat(tempSlider.value),
+            custom_prompts: {
+                decon: customPromptDecon.value,
+                logic: customPromptLogic.value,
+                critique: customPromptCritique.value,
+                synth: customPromptSynth.value
+            },
+            timestamp: new Date().toISOString(),
+            steps: currentSteps,
+            final_output: solutionContent.innerText
+        };
+        downloadBlob(JSON.stringify(payload, null, 2), `aethermind_dataset_${Date.now()}.json`, "application/json");
+    }
+
+    function downloadBlob(content, filename, mimeType) {
+        const fileBlob = new Blob([content], { type: mimeType });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(fileBlob);
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(a.href);
     }
 
     // =====================================================================
@@ -748,11 +1149,18 @@ document.addEventListener("DOMContentLoaded", () => {
         vizStatus.innerText = "Loaded from History";
         vizStatus.className = "viz-status";
 
+        // Reset SVG scaling transformation matrix
+        zoomScale = 1.0;
+        zoomTranslateX = 0;
+        zoomTranslateY = 0;
+        applyZoom();
+
         // Redraw SVG graph & details
         renderGraph();
         
         // Render Final solution
         solutionContent.innerHTML = marked.parse(session.final_output);
+        postProcessMarkdown(solutionContent);
         switchTab("solution");
         
         // Auto select final node

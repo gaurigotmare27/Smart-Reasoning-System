@@ -73,7 +73,12 @@ async def run_reasoning(
     topology: str = "cot",
     depth: int = 5,
     api_key: str = "",
-    model: str = "gemini-2.5-flash"
+    model: str = "gemini-2.5-flash",
+    temperature: float = 0.4,
+    prompt_decon: str = "",
+    prompt_logic: str = "",
+    prompt_critique: str = "",
+    prompt_synth: str = ""
 ):
     key = api_key or os.environ.get("GEMINI_API_KEY")
     if not key:
@@ -83,7 +88,15 @@ async def run_reasoning(
         )
     
     # Initialize orchestrator
-    orchestrator = Orchestrator(api_key=key, model_name=model)
+    orchestrator = Orchestrator(
+        api_key=key, 
+        model_name=model,
+        temperature=temperature,
+        prompt_decon=prompt_decon,
+        prompt_logic=prompt_logic,
+        prompt_critique=prompt_critique,
+        prompt_synth=prompt_synth
+    )
     return StreamingResponse(
         orchestrator.stream_reason(problem, topology, depth),
         media_type="text/event-stream"
