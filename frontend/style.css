@@ -1371,3 +1371,272 @@ i[data-lucide] {
     height: 12px;
 }
 
+/* =====================================================================
+   AetherMind UI Enhancements
+   ===================================================================== */
+
+/* Progress Bar container & sub-elements */
+.progress-bar-container {
+    width: 100%;
+    margin-bottom: 20px;
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 12px 18px;
+    box-shadow: var(--panel-shadow);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    transition: opacity 0.3s ease;
+}
+.progress-bar-track {
+    width: 100%;
+    height: 6px;
+    background-color: rgba(0, 0, 0, 0.15);
+    border-radius: 3px;
+    overflow: hidden;
+    position: relative;
+}
+[data-theme="light"] .progress-bar-track {
+    background-color: rgba(0, 0, 0, 0.05);
+}
+.progress-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent-indigo), var(--accent-blue));
+    width: 0%;
+    border-radius: 3px;
+    transition: width 0.4s cubic-bezier(0.25, 0.8, 0.25, 1);
+    box-shadow: 0 0 8px rgba(99, 102, 241, 0.4);
+}
+.progress-bar-status {
+    font-size: 0.72rem;
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+    font-weight: 700;
+}
+
+/* Cognitive Console Timeline View styling */
+.console-timeline {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: 100%;
+    padding: 4px 0;
+}
+
+.timeline-card {
+    border-radius: var(--radius-md);
+    background-color: rgba(0, 0, 0, 0.15);
+    border: 1.5px solid var(--border-color);
+    border-left: 4px solid var(--border-color); /* Defaults to grey, overridden by roles */
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    transition: transform var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-normal), opacity 0.3s ease;
+    overflow: hidden;
+}
+
+[data-theme="light"] .timeline-card {
+    background-color: rgba(255, 255, 255, 0.6);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.02);
+}
+
+/* Timeline card state styling */
+.timeline-card.idle {
+    opacity: 0.45;
+    background-color: transparent;
+    border-style: dashed;
+}
+
+.timeline-card.thinking {
+    opacity: 1;
+    background-color: var(--node-thinking-bg);
+    border-color: var(--accent-blue);
+    box-shadow: 0 0 16px var(--accent-blue-glow);
+    animation: nodePulse 2.5s infinite ease-in-out;
+}
+
+.timeline-card.completed {
+    opacity: 1;
+    border-color: var(--border-color);
+}
+
+.timeline-card.selected {
+    border-color: var(--role-color) !important;
+    box-shadow: 0 0 12px var(--role-glow);
+}
+
+.timeline-card.highlight-focus {
+    animation: focusHighlight 1.5s ease-out;
+    border-color: var(--accent-indigo) !important;
+}
+
+@keyframes focusHighlight {
+    0% { transform: scale(1.02); box-shadow: 0 0 20px rgba(99, 102, 241, 0.45); }
+    100% { transform: scale(1); box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+}
+
+/* Timeline card inner components */
+.timeline-card-header {
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    user-select: none;
+    border-bottom: 1px solid transparent;
+    transition: background-color var(--transition-fast);
+}
+
+.timeline-card.completed .timeline-card-header {
+    border-bottom: 1px solid var(--border-color);
+}
+
+.timeline-card-header:hover {
+    background-color: rgba(255, 255, 255, 0.02);
+}
+
+.timeline-card-title-group {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.timeline-card-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 6px;
+    background-color: rgba(255, 255, 255, 0.05);
+    color: var(--text-secondary);
+    flex-shrink: 0;
+}
+
+[data-theme="light"] .timeline-card-icon {
+    background-color: rgba(0, 0, 0, 0.03);
+}
+
+.timeline-card-icon i {
+    width: 14px;
+    height: 14px;
+}
+
+.timeline-card-title {
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.timeline-card-meta {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    color: var(--text-secondary);
+}
+
+.timeline-card-body {
+    padding: 16px;
+    font-size: 0.85rem;
+    line-height: 1.6;
+    color: var(--text-primary);
+    background-color: rgba(0, 0, 0, 0.05);
+    display: block;
+}
+
+.timeline-card.collapsed .timeline-card-body {
+    display: none;
+}
+
+/* Role colors mappings for cards and nodes */
+.role-deconstruct {
+    --role-color: var(--accent-blue);
+    --role-glow: var(--accent-blue-glow);
+}
+.role-reasoning {
+    --role-color: var(--accent-indigo);
+    --role-glow: var(--accent-indigo-glow);
+}
+.role-critique {
+    --role-color: var(--accent-rose);
+    --role-glow: rgba(244, 63, 94, 0.12);
+}
+.role-evaluation {
+    --role-color: #f59e0b; /* Amber */
+    --role-glow: rgba(245, 158, 11, 0.12);
+}
+.role-synthesis {
+    --role-color: var(--accent-emerald);
+    --role-glow: var(--accent-emerald-glow);
+}
+
+/* Apply role variables to timeline card indicators */
+.timeline-card.role-deconstruct { border-left-color: var(--role-color); }
+.timeline-card.role-reasoning { border-left-color: var(--role-color); }
+.timeline-card.role-critique { border-left-color: var(--role-color); }
+.timeline-card.role-evaluation { border-left-color: var(--role-color); }
+.timeline-card.role-synthesis { border-left-color: var(--role-color); }
+
+/* Timeline card active/completed icons based on roles */
+.timeline-card.thinking .timeline-card-icon {
+    color: var(--role-color) !important;
+    background-color: var(--role-glow) !important;
+}
+.timeline-card.completed .timeline-card-icon {
+    color: var(--role-color) !important;
+    background-color: var(--role-glow) !important;
+}
+
+/* Node card styling updates (using custom role color variables) */
+.node-card.role-deconstruct { border-color: var(--node-idle-border); }
+.node-card.role-reasoning { border-color: var(--node-idle-border); }
+.node-card.role-critique { border-color: var(--node-idle-border); }
+.node-card.role-evaluation { border-color: var(--node-idle-border); }
+.node-card.role-synthesis { border-color: var(--node-idle-border); }
+
+/* Apply role border and glows for active states */
+.node-card.thinking {
+    border-color: var(--accent-blue) !important;
+    box-shadow: 0 0 12px var(--accent-blue-glow) !important;
+}
+.node-card.completed {
+    border-color: var(--accent-emerald) !important;
+    box-shadow: 0 0 12px var(--accent-emerald-glow) !important;
+}
+
+/* Selected state override */
+.node-card.selected {
+    border-color: var(--role-color) !important;
+    outline-color: var(--role-color) !important;
+    box-shadow: 0 0 16px var(--role-glow) !important;
+}
+
+.node-card.role-deconstruct .node-icon { color: var(--accent-blue); }
+.node-card.role-reasoning .node-icon { color: var(--accent-indigo); }
+.node-card.role-critique .node-icon { color: var(--accent-rose); }
+.node-card.role-evaluation .node-icon { color: #f59e0b; }
+.node-card.role-synthesis .node-icon { color: var(--accent-emerald); }
+
+.node-card.thinking .node-icon {
+    background-color: var(--role-glow) !important;
+}
+.node-card.completed .node-icon {
+    background-color: var(--role-glow) !important;
+}
+
+/* Speed up the flow connection active dash offset speed */
+.svg-edge.active {
+    stroke: var(--accent-blue);
+    stroke-width: 2.5;
+    stroke-dasharray: 6, 6;
+    animation: flowPulse 1.8s linear infinite !important; /* Sped up from 20s */
+}
+
+

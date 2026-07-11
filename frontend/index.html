@@ -158,6 +158,14 @@
             </header>
 
             <div class="workspace-content">
+                <!-- Live Progress Bar -->
+                <div class="progress-bar-container hidden" id="progressBarContainer">
+                    <div class="progress-bar-track">
+                        <div class="progress-bar-fill" id="progressBarFill" style="width: 0%;"></div>
+                    </div>
+                    <div class="progress-bar-status" id="progressBarStatus">0% Reasoning Completed</div>
+                </div>
+
                 <!-- Input Panel -->
                 <div class="panel input-panel">
                     <div class="panel-header">
@@ -246,12 +254,12 @@
                         <div class="panel details-panel">
                             <div class="panel-header">
                                 <div class="panel-title">
-                                    <i data-lucide="glasses"></i> Cognitive Details
+                                    <i data-lucide="brain-circuit"></i> Cognitive Console
                                 </div>
                             </div>
                             <div class="panel-body" id="nodeDetailsContent">
                                 <div class="details-placeholder">
-                                    <i data-lucide="mouse-pointer-click" class="placeholder-icon"></i>
+                                    <i data-lucide="brain-circuit" class="placeholder-icon"></i>
                                     <p>Click any active reasoning node in the graph to view that agent's step-by-step thinking.</p>
                                 </div>
                             </div>

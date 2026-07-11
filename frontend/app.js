@@ -10,6 +10,7 @@ let isDarkTheme = false;
 let eventSource = null;
 let startTime = null;
 let telemetryTimer = null;
+let lastAutoScrolledId = null;
 
 // Zoom & Pan state variables
 let zoomScale = 1.0;
@@ -92,6 +93,25 @@ function getIconName(id) {
     return icons[id] || "help-circle";
 }
 
+// Map agent node to role class for styling color codes
+function getRoleClass(id) {
+    if (id === "deconstruct") return "role-deconstruct";
+    if (["critique", "critique_1", "critique_2"].includes(id)) return "role-critique";
+    if (id === "evaluation") return "role-evaluation";
+    if (id === "synthesis") return "role-synthesis";
+    return "role-reasoning";
+}
+
+// Ordered steps mapping for rendering the chronological timeline view
+const TOPOLOGY_ORDER = {
+    cot: ["deconstruct", "thinking", "synthesis"],
+    debate: ["deconstruct", "proposal", "critique", "revision", "synthesis"],
+    tot: ["deconstruct", "path_a", "path_b", "path_c", "evaluation", "expansion", "synthesis"],
+    ensemble: ["deconstruct", "agent_a", "agent_b", "agent_c", "synthesis"],
+    refinement: ["deconstruct", "draft", "critique_1", "revision_1", "critique_2", "synthesis"]
+};
+
+
 // =====================================================================
 // Dom Elements
 // =====================================================================
@@ -117,6 +137,11 @@ document.addEventListener("DOMContentLoaded", () => {
     const problemInput = document.getElementById("problemInput");
     const runBtn = document.getElementById("runBtn");
     const cancelBtn = document.getElementById("cancelBtn");
+    
+    // Progress Bar Elements
+    const progressBarContainer = document.getElementById("progressBarContainer");
+    const progressBarFill = document.getElementById("progressBarFill");
+    const progressBarStatus = document.getElementById("progressBarStatus");
     
     // Status & Output panels
     const vizStatus = document.getElementById("vizStatus");
@@ -307,6 +332,14 @@ document.addEventListener("DOMContentLoaded", () => {
         const coords = TOPOLOGY_COORDINATES[topology];
         currentSteps = {};
         selectedNodeId = null;
+        lastAutoScrolledId = null;
+        
+        // Hide and reset progress bar
+        if (progressBarContainer) {
+            progressBarContainer.classList.add("hidden");
+            progressBarFill.style.width = "0%";
+            progressBarStatus.innerText = "0% Reasoning Completed";
+        }
         
         // Populate currentSteps layout structure with default empty values
         for (const [id, value] of Object.entries(coords)) {
@@ -332,7 +365,7 @@ document.addEventListener("DOMContentLoaded", () => {
         applyZoom();
 
         renderGraph();
-        renderNodeDetails(null);
+        renderTimeline();
     }
 
     function getFriendlyLabel(id) {
@@ -386,6 +419,23 @@ document.addEventListener("DOMContentLoaded", () => {
         return [];
     }
 
+    function updateProgressBar() {
+        if (!progressBarContainer || !progressBarFill || !progressBarStatus) return;
+        const steps = Object.values(currentSteps);
+        if (steps.length === 0) return;
+        
+        const completedCount = steps.filter(s => s.status === "completed").length;
+        const percentage = (completedCount / steps.length) * 100;
+        
+        progressBarFill.style.width = `${percentage}%`;
+        progressBarStatus.innerText = `${Math.round(percentage)}% Reasoning Completed (${completedCount} of ${steps.length} agents finished)`;
+        
+        // Show container if running
+        if (completedCount > 0 || steps.some(s => s.status === "thinking")) {
+            progressBarContainer.classList.remove("hidden");
+        }
+    }
+
     function updateTelemetry() {
         if (!startTime) return;
         const steps = Object.values(currentSteps);
@@ -407,6 +457,8 @@ document.addEventListener("DOMContentLoaded", () => {
             const wps = Math.round(totalWords / elapsed);
             statSpeed.innerText = `${wps} w/s`;
         }
+
+        updateProgressBar();
     }
 
     function startReasoningProcess() {
@@ -495,9 +547,12 @@ document.addEventListener("DOMContentLoaded", () => {
                     renderGraph();
                     updateTelemetry();
                     
-                    // Render details panel if active
-                    if (selectedNodeId === step.id) {
-                        renderNodeDetails(step.id);
+                    // Auto-scroll timeline to active thinking node when its status transitions
+                    if (step.status === "thinking" && lastAutoScrolledId !== step.id) {
+                        lastAutoScrolledId = step.id;
+                        renderTimeline(step.id);
+                    } else {
+                        renderTimeline();
                     }
                 } else if (data.event === "done") {
                     cleanupTelemetry();
@@ -513,7 +568,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     // Auto select the synthesis node
                     selectedNodeId = "synthesis";
                     renderGraph();
-                    renderNodeDetails("synthesis");
+                    renderTimeline("synthesis");
 
                     // Save session details to backend DB
                     saveSessionToHistory(problem, topology, data.final_output);
@@ -567,9 +622,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         
         renderGraph();
-        if (selectedNodeId) {
-            renderNodeDetails(selectedNodeId);
-        }
+        renderTimeline();
         enableUI();
     }
 
@@ -668,7 +721,8 @@ document.addEventListener("DOMContentLoaded", () => {
             foreignObject.setAttribute("class", "node-foreign-object");
 
             // Configure state classes
-            let cardClass = `node-card ${step.status}`;
+            const roleClass = getRoleClass(id);
+            let cardClass = `node-card ${step.status} ${roleClass}`;
             if (selectedNodeId === id) cardClass += " selected";
 
             // Format status label
@@ -700,7 +754,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 e.stopPropagation();
                 selectedNodeId = id;
                 renderGraph(); // Trigger redrawing to apply selection style
-                renderNodeDetails(id);
+                renderTimeline(id);
             });
 
             foreignObject.appendChild(containerDiv);
@@ -715,57 +769,127 @@ document.addEventListener("DOMContentLoaded", () => {
     // =====================================================================
     // Node details viewer
     // =====================================================================
-    function renderNodeDetails(nodeId) {
-        if (!nodeId || !currentSteps[nodeId]) {
-            detailsContent.innerHTML = `
-                <div class="details-placeholder">
-                    <i data-lucide="mouse-pointer-click" class="placeholder-icon"></i>
-                    <p>Click any active reasoning node in the graph to view that agent's step-by-step thinking.</p>
+    // =====================================================================
+    // Chronological step timeline log rendering (Cognitive Console)
+    // =====================================================================
+    function renderTimeline(focusId = null) {
+        const topology = topologySelect.value;
+        const order = TOPOLOGY_ORDER[topology];
+        if (!order) return;
+
+        let html = '<div class="console-timeline">';
+        
+        order.forEach(id => {
+            const step = currentSteps[id];
+            if (!step) return;
+
+            const roleClass = getRoleClass(id);
+            const isSelected = selectedNodeId === id;
+            
+            let cardClass = `timeline-card ${step.status} ${roleClass}`;
+            if (isSelected) cardClass += " selected";
+            
+            // By default, idle cards are collapsed
+            const isCollapsed = step.collapsed !== undefined ? step.collapsed : (step.status === "idle");
+            if (isCollapsed) cardClass += " collapsed";
+
+            // Status label & metadata
+            let statusText = "";
+            let metaText = "";
+            
+            if (step.status === "idle") {
+                statusText = "Queued";
+            } else if (step.status === "thinking") {
+                statusText = "Running...";
+                metaText = `<span class="animate-spin" style="display:inline-block;"><i data-lucide="loader" style="width:12px; height:12px;"></i></span>`;
+            } else if (step.status === "completed") {
+                statusText = "Completed";
+                const wordCount = step.output ? step.output.trim().split(/\s+/).filter(w => w.length > 0).length : 0;
+                metaText = `<span>${step.duration}s</span><span>•</span><span>${wordCount} words</span>`;
+            }
+
+            const iconName = getIconName(id);
+
+            html += `
+                <div class="${cardClass}" id="timeline-card-${id}">
+                    <div class="timeline-card-header" data-id="${id}">
+                        <div class="timeline-card-title-group">
+                            <div class="timeline-card-icon">
+                                <i data-lucide="${iconName}"></i>
+                            </div>
+                            <div class="timeline-card-title">${step.label}</div>
+                        </div>
+                        <div class="timeline-card-meta">
+                            <span>${statusText}</span>
+                            ${metaText ? `<span>•</span>${metaText}` : ""}
+                        </div>
+                    </div>
+                    <div class="timeline-card-body">
+            `;
+
+            if (step.status === "thinking" && !step.output) {
+                html += `
+                    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px 0; color: var(--text-secondary);">
+                        <i data-lucide="loader" class="animate-spin" style="color: var(--accent-blue); width:24px; height:24px; margin-bottom:8px;"></i>
+                        <p style="font-style: italic; font-size: 0.8rem;">Agent is initiating reasoning cycle...</p>
+                    </div>
+                `;
+            } else if (step.output) {
+                html += marked.parse(step.output);
+            } else {
+                html += `<p style="color: var(--text-muted); font-style: italic; font-size: 0.8rem;">Awaiting previous agent outputs...</p>`;
+            }
+
+            html += `
+                    </div>
                 </div>
             `;
-            lucide.createIcons();
-            return;
-        }
+        });
 
-        const step = currentSteps[nodeId];
+        html += '</div>';
         
-        // Calculate performance metrics
-        const wordCount = step.output ? step.output.trim().split(/\s+/).filter(w => w.length > 0).length : 0;
-        const speed = step.duration > 0 && wordCount > 0 ? (wordCount / step.duration).toFixed(1) : null;
-        
-        let headerHtml = `
-            <div style="border-bottom: 1px solid var(--border-color); padding-bottom: 12px; margin-bottom: 15px;">
-                <h2 style="font-size: 1.15rem; display: flex; align-items: center; gap: 8px;">
-                    <span class="status-indicator ${step.status === 'completed' ? 'online' : ''}" style="background-color: ${step.status === 'completed' ? 'var(--accent-emerald)' : 'var(--accent-blue)'}"></span>
-                    ${step.label}
-                </h2>
-                <div style="display: flex; flex-wrap: wrap; gap: 15px; font-size: 0.75rem; color: var(--text-secondary); font-family: var(--font-mono); margin-top: 5px;">
-                    <span>STATUS: ${step.status.toUpperCase()}</span>
-                    <span>DURATION: ${step.duration}s</span>
-                    ${wordCount > 0 ? `<span>WORDS: ${wordCount}</span>` : ''}
-                    ${speed ? `<span>SPEED: ${speed} w/s</span>` : ''}
-                </div>
-            </div>
-        `;
-
-        let contentHtml = "";
-        if (step.status === "idle") {
-            contentHtml = `<p style="color: var(--text-muted); font-style: italic;">This node is currently queued in the pipeline and has not started executing yet.</p>`;
-        } else if (step.status === "thinking" && !step.output) {
-            contentHtml = `
-                <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px 0; color: var(--text-secondary);">
-                    <i data-lucide="loader" class="animate-spin placeholder-icon" style="color: var(--accent-blue);"></i>
-                    <p style="font-style: italic; font-size: 0.85rem; margin-top: 10px;">Agent is analyzing inputs and formulating logic structure...</p>
-                </div>
-            `;
-        } else {
-            // Render markdown content
-            contentHtml = marked.parse(step.output);
-        }
-
-        detailsContent.innerHTML = headerHtml + contentHtml;
+        detailsContent.innerHTML = html;
         postProcessMarkdown(detailsContent);
         lucide.createIcons();
+
+        // Bind toggle collapse listeners
+        order.forEach(id => {
+            const cardEl = document.getElementById(`timeline-card-${id}`);
+            if (cardEl) {
+                const headerEl = cardEl.querySelector(".timeline-card-header");
+                headerEl.addEventListener("click", () => {
+                    const step = currentSteps[id];
+                    const wasCollapsed = cardEl.classList.contains("collapsed");
+                    if (wasCollapsed) {
+                        cardEl.classList.remove("collapsed");
+                        if (step) step.collapsed = false;
+                    } else {
+                        cardEl.classList.add("collapsed");
+                        if (step) step.collapsed = true;
+                    }
+                });
+            }
+        });
+
+        // Focus & scroll to target card if requested
+        if (focusId) {
+            const targetCard = document.getElementById(`timeline-card-${focusId}`);
+            if (targetCard) {
+                // Ensure card is expanded
+                targetCard.classList.remove("collapsed");
+                const step = currentSteps[focusId];
+                if (step) step.collapsed = false;
+                
+                // Add highlight
+                targetCard.classList.add("highlight-focus");
+                setTimeout(() => {
+                    targetCard.classList.remove("highlight-focus");
+                }, 1500);
+
+                // Scroll into view inside detailsPanel body
+                targetCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
+            }
+        }
     }
 
     // =====================================================================
@@ -1166,7 +1290,7 @@ document.addEventListener("DOMContentLoaded", () => {
         // Auto select final node
         selectedNodeId = "synthesis";
         renderGraph();
-        renderNodeDetails("synthesis");
+        renderTimeline("synthesis");
     }
 
     // Redraw on window resize
