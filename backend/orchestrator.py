@@ -1,6 +1,7 @@
 import json
 import time
-from typing import Generator, List, Dict, Any
+import asyncio
+from typing import Generator, List, Dict, Any, AsyncGenerator
 from google import genai
 from google.genai import types
 
@@ -51,20 +52,22 @@ class Orchestrator:
         )
         return response.text
 
-    def _run_agent_stream(
+    async def _run_agent_async(
         self,
         step_id: str,
         label: str,
         system_instruction: str,
         prompt: str,
-        parent_ids: List[str]
-    ) -> Generator[str, None, str]:
-        """Runs a reasoning agent, streaming the output in real-time."""
-        yield self._send_step(step_id, label, "thinking", "", 0.0, parent_ids)
+        parent_ids: List[str],
+        queue: asyncio.Queue
+    ) -> str:
+        """Runs a reasoning agent asynchronously, putting stream events into the queue."""
+        await queue.put(self._send_step(step_id, label, "thinking", "", 0.0, parent_ids))
         start = time.time()
+        accumulated_text = ""
         
         try:
-            response = self.client.models.generate_content_stream(
+            response = await self.client.aio.models.generate_content_stream(
                 model=self.model_name,
                 contents=prompt,
                 config=types.GenerateContentConfig(
@@ -73,17 +76,15 @@ class Orchestrator:
                 )
             )
             
-            accumulated_text = ""
             last_yield_time = time.time()
-            
-            for chunk in response:
+            async for chunk in response:
                 if chunk.text:
                     accumulated_text += chunk.text
                     current_time = time.time()
                     # Yield update every 100ms to avoid flooding SSE channel
                     if current_time - last_yield_time > 0.1:
                         duration = current_time - start
-                        yield self._send_step(step_id, label, "thinking", accumulated_text, duration, parent_ids)
+                        await queue.put(self._send_step(step_id, label, "thinking", accumulated_text, duration, parent_ids))
                         last_yield_time = current_time
         except Exception as e:
             # Fallback to simulated streaming text to test UI/cancellation when API is rate-limited
@@ -95,41 +96,62 @@ class Orchestrator:
                 "Drafting intermediate steps and auditing logical soundness...\n\n",
                 "Verifying correctness against known constraints. All checks pass.\n\n"
             ]
-            accumulated_text = ""
             for paragraph in simulated_paragraphs:
                 # Stream chunk-by-chunk to simulate network latency
                 for i in range(0, len(paragraph), 4):
                     chunk = paragraph[i:i+4]
                     accumulated_text += chunk
-                    time.sleep(0.04) # Simulate network/API latency
+                    await asyncio.sleep(0.04) # Simulate network/API latency
                     duration = time.time() - start
-                    yield self._send_step(step_id, label, "thinking", accumulated_text, duration, parent_ids)
+                    await queue.put(self._send_step(step_id, label, "thinking", accumulated_text, duration, parent_ids))
                     
         duration = time.time() - start
-        yield self._send_step(step_id, label, "completed", accumulated_text, duration, parent_ids)
+        await queue.put(self._send_step(step_id, label, "completed", accumulated_text, duration, parent_ids))
         return accumulated_text
 
-    def stream_reason(self, problem: str, topology: str, depth: int) -> Generator[str, None, None]:
+    async def stream_reason(self, problem: str, topology: str, depth: int) -> AsyncGenerator[str, None]:
         """
         Executes reasoning agents based on the selected topology.
         Yields Server-Sent Events (SSE) detailing the progress of the reasoning graph.
         """
+        queue = asyncio.Queue()
+
+        async def run_topology():
+            try:
+                if topology == "cot":
+                    await self._run_chain_of_thought(problem, depth, queue)
+                elif topology == "debate":
+                    await self._run_critic_debate(problem, depth, queue)
+                elif topology == "tot":
+                    await self._run_tree_of_thoughts(problem, depth, queue)
+                elif topology == "ensemble":
+                    await self._run_ensemble_consensus(problem, depth, queue)
+                elif topology == "refinement":
+                    await self._run_self_correction_loop(problem, depth, queue)
+                else:
+                    raise ValueError(f"Unknown topology: {topology}")
+            except Exception as e:
+                # Yield error event
+                await queue.put(f"data: {json.dumps({'event': 'error', 'message': str(e)})}\n\n")
+            finally:
+                # Sentinel to end streaming
+                await queue.put(None)
+
+        bg_task = asyncio.create_task(run_topology())
+
         try:
-            if topology == "cot":
-                yield from self._run_chain_of_thought(problem, depth)
-            elif topology == "debate":
-                yield from self._run_critic_debate(problem, depth)
-            elif topology == "tot":
-                yield from self._run_tree_of_thoughts(problem, depth)
-            elif topology == "ensemble":
-                yield from self._run_ensemble_consensus(problem, depth)
-            elif topology == "refinement":
-                yield from self._run_self_correction_loop(problem, depth)
-            else:
-                raise ValueError(f"Unknown topology: {topology}")
-        except Exception as e:
-            # Yield error event
-            yield f"data: {json.dumps({'event': 'error', 'message': str(e)})}\n\n"
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                yield item
+        finally:
+            if not bg_task.done():
+                bg_task.cancel()
+                try:
+                    await bg_task
+                except asyncio.CancelledError:
+                    pass
 
     def _send_step(self, step_id: str, label: str, status: str, output: str, duration: float, parent_ids: List[str]) -> str:
         """Formulate SSE SSE data package."""
@@ -146,15 +168,15 @@ class Orchestrator:
         }
         return f"data: {json.dumps(data)}\n\n"
 
-    def _run_chain_of_thought(self, problem: str, depth: int) -> Generator[str, None, None]:
+    async def _run_chain_of_thought(self, problem: str, depth: int, queue: asyncio.Queue) -> None:
         # Step 1: Deconstruct
         sys_decon = self.get_prompt_decon(
             "You are the Problem Deconstruction Agent. Your task is to break down the user's input "
             "into core components, key constraints, and implicit assumptions. Outline what sub-problems "
             "must be solved first."
         )
-        decon_output = yield from self._run_agent_stream(
-            "deconstruct", "Problem Deconstruction", sys_decon, f"Problem:\n{problem}", []
+        decon_output = await self._run_agent_async(
+            "deconstruct", "Problem Deconstruction", sys_decon, f"Problem:\n{problem}", [], queue
         )
 
         # Step 2: Step-by-Step Thinking
@@ -164,8 +186,8 @@ class Orchestrator:
             "Write out your calculations, reasoning logic, or code blocks in full detail."
         )
         think_prompt = f"Problem:\n{problem}\n\nDeconstruction Analysis:\n{decon_output}"
-        think_output = yield from self._run_agent_stream(
-            "thinking", "Sequential Logic Chain", sys_think, think_prompt, ["deconstruct"]
+        think_output = await self._run_agent_async(
+            "thinking", "Sequential Logic Chain", sys_think, think_prompt, ["deconstruct"], queue
         )
 
         # Step 3: Synthesis & Validation
@@ -180,21 +202,21 @@ class Orchestrator:
             f"Deconstruction:\n{decon_output}\n\n"
             f"Logical Analysis:\n{think_output}"
         )
-        synth_output = yield from self._run_agent_stream(
-            "synthesis", "Synthesis & Verification", sys_synth, synth_prompt, ["thinking"]
+        synth_output = await self._run_agent_async(
+            "synthesis", "Synthesis & Verification", sys_synth, synth_prompt, ["thinking"], queue
         )
 
         # Send final completed event
-        yield f"data: {json.dumps({'event': 'done', 'final_output': synth_output})}\n\n"
+        await queue.put(f"data: {json.dumps({'event': 'done', 'final_output': synth_output})}\n\n")
 
-    def _run_critic_debate(self, problem: str, depth: int) -> Generator[str, None, None]:
+    async def _run_critic_debate(self, problem: str, depth: int, queue: asyncio.Queue) -> None:
         # Step 1: Deconstruct
         sys_decon = self.get_prompt_decon(
             "You are the Deconstruction Agent. Break down the user's problem into core constraints, "
             "requirements, and logical targets."
         )
-        decon_output = yield from self._run_agent_stream(
-            "deconstruct", "Problem Deconstruction", sys_decon, f"Problem:\n{problem}", []
+        decon_output = await self._run_agent_async(
+            "deconstruct", "Problem Deconstruction", sys_decon, f"Problem:\n{problem}", [], queue
         )
 
         # Step 2: Proposal Draft
@@ -203,8 +225,8 @@ class Orchestrator:
             "Aim to cover all bases and requirements."
         )
         prop_prompt = f"Problem:\n{problem}\n\nDeconstruction:\n{decon_output}"
-        prop_output = yield from self._run_agent_stream(
-            "proposal", "Initial Draft Solution", sys_proposal, prop_prompt, ["deconstruct"]
+        prop_output = await self._run_agent_async(
+            "proposal", "Initial Draft Solution", sys_proposal, prop_prompt, ["deconstruct"], queue
         )
 
         # Step 3: Critique
@@ -214,8 +236,8 @@ class Orchestrator:
             "Outline specific ways to make the solution bulletproof."
         )
         crit_prompt = f"Problem:\n{problem}\n\nProposed Draft:\n{prop_output}"
-        crit_output = yield from self._run_agent_stream(
-            "critique", "Ruthless Critique & Audit", sys_critique, crit_prompt, ["proposal"]
+        crit_output = await self._run_agent_async(
+            "critique", "Ruthless Critique & Audit", sys_critique, crit_prompt, ["proposal"], queue
         )
 
         # Step 4: Refined Revision
@@ -228,8 +250,8 @@ class Orchestrator:
             f"Initial Proposal:\n{prop_output}\n\n"
             f"Critique Points:\n{crit_output}"
         )
-        rev_output = yield from self._run_agent_stream(
-            "revision", "Refined & Audited Revision", sys_revision, rev_prompt, ["critique"]
+        rev_output = await self._run_agent_async(
+            "revision", "Refined & Audited Revision", sys_revision, rev_prompt, ["critique"], queue
         )
 
         # Step 5: Synthesis
@@ -244,50 +266,48 @@ class Orchestrator:
             f"Revised Solution:\n{rev_output}\n\n"
             f"Critique History:\n{crit_output}"
         )
-        synth_output = yield from self._run_agent_stream(
-            "synthesis", "Synthesis & Verdict", sys_synth, synth_prompt, ["revision"]
+        synth_output = await self._run_agent_async(
+            "synthesis", "Synthesis & Verdict", sys_synth, synth_prompt, ["revision"], queue
         )
 
         # Send final completed event
-        yield f"data: {json.dumps({'event': 'done', 'final_output': synth_output})}\n\n"
+        await queue.put(f"data: {json.dumps({'event': 'done', 'final_output': synth_output})}\n\n")
 
-    def _run_tree_of_thoughts(self, problem: str, depth: int) -> Generator[str, None, None]:
+    async def _run_tree_of_thoughts(self, problem: str, depth: int, queue: asyncio.Queue) -> None:
         # Step 1: Deconstruct
         sys_decon = self.get_prompt_decon(
             "You are the Deconstruction Agent. Break down the user's problem to identify the parameters "
             "needed for ideating alternative paths."
         )
-        decon_output = yield from self._run_agent_stream(
-            "deconstruct", "Problem Deconstruction", sys_decon, f"Problem:\n{problem}", []
+        decon_output = await self._run_agent_async(
+            "deconstruct", "Problem Deconstruction", sys_decon, f"Problem:\n{problem}", [], queue
         )
 
         # Step 2: Branching Hypotheses
-        # Yield all 3 thinking nodes first to show they are in queue/thinking state
-        yield self._send_step("path_a", "Reasoning Branch A", "thinking", "", 0, ["deconstruct"])
-        yield self._send_step("path_b", "Reasoning Branch B", "thinking", "", 0, ["deconstruct"])
-        yield self._send_step("path_c", "Reasoning Branch C", "thinking", "", 0, ["deconstruct"])
-
+        # Start all 3 branches in parallel
         sys_branch = self.get_prompt_logic(
             "You are the Branching Agent. Given the problem, propose a unique reasoning strategy or path. "
             "Focus on a specific angle (e.g., Path A: direct analytical/math, Path B: algorithmic/computational, "
             "Path C: heuristic/creative). Write out the outline of how this path would solve the problem."
         )
 
-        path_a_out = yield from self._run_agent_stream(
+        task_a = asyncio.create_task(self._run_agent_async(
             "path_a", "Reasoning Branch A", sys_branch,
             f"Problem:\n{problem}\nDeconstruction:\n{decon_output}\n\nPath Focus: Analytical, direct mathematical or logical deduction.",
-            ["deconstruct"]
-        )
-        path_b_out = yield from self._run_agent_stream(
+            ["deconstruct"], queue
+        ))
+        task_b = asyncio.create_task(self._run_agent_async(
             "path_b", "Reasoning Branch B", sys_branch,
             f"Problem:\n{problem}\nDeconstruction:\n{decon_output}\n\nPath Focus: Algorithmic, structural, or case-by-case decomposition.",
-            ["deconstruct"]
-        )
-        path_c_out = yield from self._run_agent_stream(
+            ["deconstruct"], queue
+        ))
+        task_c = asyncio.create_task(self._run_agent_async(
             "path_c", "Reasoning Branch C", sys_branch,
             f"Problem:\n{problem}\nDeconstruction:\n{decon_output}\n\nPath Focus: Heuristic, visual model, or alternative abstraction.",
-            ["deconstruct"]
-        )
+            ["deconstruct"], queue
+        ))
+
+        path_a_out, path_b_out, path_c_out = await asyncio.gather(task_a, task_b, task_c)
 
         # Step 3: Evaluation
         sys_eval = self.get_prompt_critique(
@@ -301,8 +321,8 @@ class Orchestrator:
             f"Branch B:\n{path_b_out}\n\n"
             f"Branch C:\n{path_c_out}"
         )
-        eval_output = yield from self._run_agent_stream(
-            "evaluation", "Heuristic Path Evaluation", sys_eval, eval_prompt, ["path_a", "path_b", "path_c"]
+        eval_output = await self._run_agent_async(
+            "evaluation", "Heuristic Path Evaluation", sys_eval, eval_prompt, ["path_a", "path_b", "path_c"], queue
         )
 
         # Step 4: Expansion
@@ -318,8 +338,8 @@ class Orchestrator:
             f"Branch C:\n{path_c_out}\n\n"
             f"Evaluation Deciding Best Path:\n{eval_output}"
         )
-        exp_output = yield from self._run_agent_stream(
-            "expansion", "Expanding Chosen Branch", sys_expansion, exp_prompt, ["evaluation"]
+        exp_output = await self._run_agent_async(
+            "expansion", "Expanding Chosen Branch", sys_expansion, exp_prompt, ["evaluation"], queue
         )
 
         # Step 5: Synthesis
@@ -334,60 +354,56 @@ class Orchestrator:
             f"Expanded Execution:\n{exp_output}\n\n"
             f"Path Evaluation History:\n{eval_output}"
         )
-        synth_output = yield from self._run_agent_stream(
-            "synthesis", "Synthesis & Solution Verification", sys_synth, synth_prompt, ["expansion"]
+        synth_output = await self._run_agent_async(
+            "synthesis", "Synthesis & Solution Verification", sys_synth, synth_prompt, ["expansion"], queue
         )
 
         # Send final completed event
-        yield f"data: {json.dumps({'event': 'done', 'final_output': synth_output})}\n\n"
+        await queue.put(f"data: {json.dumps({'event': 'done', 'final_output': synth_output})}\n\n")
 
-    def _run_ensemble_consensus(self, problem: str, depth: int) -> Generator[str, None, None]:
+    async def _run_ensemble_consensus(self, problem: str, depth: int, queue: asyncio.Queue) -> None:
         # Step 1: Deconstruct
         sys_decon = self.get_prompt_decon(
             "You are the Problem Deconstruction Agent. Break down the input problem, "
             "defining parameters, core targets, variables, and requirements for the expert agents."
         )
-        decon_output = yield from self._run_agent_stream(
-            "deconstruct", "Problem Deconstruction", sys_decon, f"Problem:\n{problem}", []
+        decon_output = await self._run_agent_async(
+            "deconstruct", "Problem Deconstruction", sys_decon, f"Problem:\n{problem}", [], queue
         )
-
-        # Parallel state triggers
-        yield self._send_step("agent_a", "Analytical Expert", "thinking", "", 0, ["deconstruct"])
-        yield self._send_step("agent_b", "Algorithmic Expert", "thinking", "", 0, ["deconstruct"])
-        yield self._send_step("agent_c", "Creative Expert", "thinking", "", 0, ["deconstruct"])
 
         # Agent A (Analytical)
         sys_agent_a = self.get_prompt_logic(
             "You are the Analytical Expert Agent. Focus on a rigorous, step-by-step mathematical, "
             "logical, and formal deduction of the problem."
         )
-        agent_a_out = yield from self._run_agent_stream(
-            "agent_a", "Analytical Expert", sys_agent_a,
-            f"Problem:\n{problem}\nDeconstruction:\n{decon_output}",
-            ["deconstruct"]
-        )
-
         # Agent B (Algorithmic)
         sys_agent_b = self.get_prompt_logic(
             "You are the Algorithmic Expert Agent. Focus on efficiency, computation, code structure, "
             "data structures, algorithmic optimizations, and corner cases."
         )
-        agent_b_out = yield from self._run_agent_stream(
-            "agent_b", "Algorithmic Expert", sys_agent_b,
-            f"Problem:\n{problem}\nDeconstruction:\n{decon_output}",
-            ["deconstruct"]
-        )
-
         # Agent C (Creative)
         sys_agent_c = self.get_prompt_logic(
             "You are the Creative/Heuristic Expert Agent. Focus on analogies, visual models, "
             "simplifications, heuristics, and creative out-of-the-box approaches."
         )
-        agent_c_out = yield from self._run_agent_stream(
+
+        task_a = asyncio.create_task(self._run_agent_async(
+            "agent_a", "Analytical Expert", sys_agent_a,
+            f"Problem:\n{problem}\nDeconstruction:\n{decon_output}",
+            ["deconstruct"], queue
+        ))
+        task_b = asyncio.create_task(self._run_agent_async(
+            "agent_b", "Algorithmic Expert", sys_agent_b,
+            f"Problem:\n{problem}\nDeconstruction:\n{decon_output}",
+            ["deconstruct"], queue
+        ))
+        task_c = asyncio.create_task(self._run_agent_async(
             "agent_c", "Creative Expert", sys_agent_c,
             f"Problem:\n{problem}\nDeconstruction:\n{decon_output}",
-            ["deconstruct"]
-        )
+            ["deconstruct"], queue
+        ))
+
+        agent_a_out, agent_b_out, agent_c_out = await asyncio.gather(task_a, task_b, task_c)
 
         # Synthesis (Consensus)
         sys_synth = self.get_prompt_synth(
@@ -402,20 +418,20 @@ class Orchestrator:
             f"Algorithmic Expert Solution:\n{agent_b_out}\n\n"
             f"Creative Expert Solution:\n{agent_c_out}"
         )
-        synth_output = yield from self._run_agent_stream(
-            "synthesis", "Consensus Synthesis", sys_synth, synth_prompt, ["agent_a", "agent_b", "agent_c"]
+        synth_output = await self._run_agent_async(
+            "synthesis", "Consensus Synthesis", sys_synth, synth_prompt, ["agent_a", "agent_b", "agent_c"], queue
         )
 
         # Send final completed event
-        yield f"data: {json.dumps({'event': 'done', 'final_output': synth_output})}\n\n"
+        await queue.put(f"data: {json.dumps({'event': 'done', 'final_output': synth_output})}\n\n")
 
-    def _run_self_correction_loop(self, problem: str, depth: int) -> Generator[str, None, None]:
+    async def _run_self_correction_loop(self, problem: str, depth: int, queue: asyncio.Queue) -> None:
         # Step 1: Deconstruct
         sys_decon = self.get_prompt_decon(
             "You are the Deconstruction Agent. Identify core components, parameters, and logical milestones."
         )
-        decon_output = yield from self._run_agent_stream(
-            "deconstruct", "Problem Deconstruction", sys_decon, f"Problem:\n{problem}", []
+        decon_output = await self._run_agent_async(
+            "deconstruct", "Problem Deconstruction", sys_decon, f"Problem:\n{problem}", [], queue
         )
 
         # Step 2: Initial Draft
@@ -423,8 +439,8 @@ class Orchestrator:
             "You are the Proposer Agent. Draft a detailed initial solution for the problem."
         )
         draft_prompt = f"Problem:\n{problem}\nDeconstruction:\n{decon_output}"
-        draft_output = yield from self._run_agent_stream(
-            "draft", "Initial Draft Proposal", sys_draft, draft_prompt, ["deconstruct"]
+        draft_output = await self._run_agent_async(
+            "draft", "Initial Draft Proposal", sys_draft, draft_prompt, ["deconstruct"], queue
         )
 
         # Step 3: Critique Round 1
@@ -433,8 +449,8 @@ class Orchestrator:
             "missing constraints, math slip-ups, or performance bottlenecks."
         )
         crit_1_prompt = f"Problem:\n{problem}\nDraft Proposal:\n{draft_output}"
-        crit_1_output = yield from self._run_agent_stream(
-            "critique_1", "Audit Round 1", sys_crit_1, crit_1_prompt, ["draft"]
+        crit_1_output = await self._run_agent_async(
+            "critique_1", "Audit Round 1", sys_crit_1, crit_1_prompt, ["draft"], queue
         )
 
         # Step 4: Revision Round 1
@@ -447,8 +463,8 @@ class Orchestrator:
             f"Initial Draft:\n{draft_output}\n\n"
             f"Audit Critiques:\n{crit_1_output}"
         )
-        rev_1_output = yield from self._run_agent_stream(
-            "revision_1", "Revision Round 1", sys_rev_1, rev_1_prompt, ["critique_1"]
+        rev_1_output = await self._run_agent_async(
+            "revision_1", "Revision Round 1", sys_rev_1, rev_1_prompt, ["critique_1"], queue
         )
 
         # Step 5: Critique Round 2
@@ -457,13 +473,13 @@ class Orchestrator:
             "Double-check remaining edge cases and determine if the previous issues were fully resolved."
         )
         crit_2_prompt = f"Problem:\n{problem}\nRevised Draft:\n{rev_1_output}"
-        crit_2_output = yield from self._run_agent_stream(
-            "critique_2", "Audit Round 2", sys_crit_2, crit_2_prompt, ["revision_1"]
+        crit_2_output = await self._run_agent_async(
+            "critique_2", "Audit Round 2", sys_crit_2, crit_2_prompt, ["revision_1"], queue
         )
 
         # Step 6: Synthesis
         sys_synth = self.get_prompt_synth(
-            "You are the Synthesis Agent. Compile the final double-audited solution in beautiful Markdown. "
+            "You are the Synthesis Agent. Review the final double-audited solution in beautiful Markdown. "
             "Include a section 'Why This Answer Makes Sense' explaining how the self-correction loop "
             "helped optimize the answer and verified its logical soundness."
         )
@@ -472,9 +488,9 @@ class Orchestrator:
             f"Double-Audited Solution:\n{rev_1_output}\n\n"
             f"Audit Critique History:\n{crit_2_output}"
         )
-        synth_output = yield from self._run_agent_stream(
-            "synthesis", "Consolidated Synthesis", sys_synth, synth_prompt, ["critique_2"]
+        synth_output = await self._run_agent_async(
+            "synthesis", "Consolidated Synthesis", sys_synth, synth_prompt, ["critique_2"], queue
         )
 
         # Send final completed event
-        yield f"data: {json.dumps({'event': 'done', 'final_output': synth_output})}\n\n"
+        await queue.put(f"data: {json.dumps({'event': 'done', 'final_output': synth_output})}\n\n")

@@ -7,7 +7,7 @@ let currentSteps = {};
 let selectedNodeId = null;
 let currentSessionId = null;
 let isDarkTheme = false;
-let eventSource = null;
+let abortController = null;
 let startTime = null;
 let telemetryTimer = null;
 let lastAutoScrolledId = null;
@@ -365,7 +365,7 @@ document.addEventListener("DOMContentLoaded", () => {
         applyZoom();
 
         renderGraph();
-        renderTimeline();
+        initTimeline();
     }
 
     function getFriendlyLabel(id) {
@@ -461,6 +461,71 @@ document.addEventListener("DOMContentLoaded", () => {
         updateProgressBar();
     }
 
+    function handleReasoningStreamEvent(data, problem, topology) {
+        if (data.event === "step") {
+            const step = data.step;
+            
+            // Update step details in local memory
+            currentSteps[step.id] = {
+                id: step.id,
+                label: step.label,
+                status: step.status,
+                output: step.output,
+                duration: step.duration,
+                parent_ids: step.parent_ids
+            };
+
+            vizStatus.innerText = `Agent: ${step.label} (${step.status})`;
+
+            // Auto select thinking node
+            if (step.status === "thinking" || (step.status === "completed" && !selectedNodeId)) {
+                selectedNodeId = step.id;
+                updateNodeSelection();
+            }
+
+            updateGraphState(); // Surgically update node states and links in graph SVG
+            updateTelemetry();
+            
+            // Auto-scroll timeline to active thinking node when its status transitions
+            const shouldFocus = (step.status === "thinking" && lastAutoScrolledId !== step.id);
+            if (shouldFocus) {
+                lastAutoScrolledId = step.id;
+            }
+            updateTimelineCard(step.id, shouldFocus);
+        } else if (data.event === "done") {
+            cleanupTelemetry();
+            vizStatus.innerText = "Completed";
+            vizStatus.className = "viz-status completed";
+            
+            // Render Final synthesized output
+            solutionContent.innerHTML = marked.parse(data.final_output);
+            postProcessMarkdown(solutionContent);
+            switchTab("solution"); // Auto swap to final output view
+
+            // Auto select the synthesis node
+            selectedNodeId = "synthesis";
+            updateNodeSelection();
+            
+            // Render/update timeline cards to final state
+            Object.keys(currentSteps).forEach(id => {
+                updateTimelineCard(id, id === "synthesis");
+            });
+
+            // Save session details to backend DB
+            saveSessionToHistory(problem, topology, data.final_output);
+            
+            // Reset UI
+            enableUI();
+        } else if (data.event === "error") {
+            cleanupTelemetry();
+            vizStatus.innerText = "Error encountered";
+            vizStatus.className = "viz-status error";
+            detailsContent.innerHTML = `<div class="details-placeholder"><i data-lucide="alert-triangle" style="color: var(--accent-rose); width: 48px; height: 48px;"></i><p style="color: var(--accent-rose); margin-top: 10px;">Error: ${data.message}</p></div>`;
+            lucide.createIcons();
+            enableUI();
+        }
+    }
+
     function startReasoningProcess() {
         const problem = problemInput.value.trim();
         const apiKey = apiKeyInput.value.trim();
@@ -505,97 +570,79 @@ document.addEventListener("DOMContentLoaded", () => {
         // Generate a new Session ID
         currentSessionId = "session_" + Date.now();
 
-        // Construct EventSource URL with advanced config parameters
-        const params = new URLSearchParams({
+        // Construct AbortController and payload for POST request
+        abortController = new AbortController();
+        const signal = abortController.signal;
+
+        const payload = {
             problem: problem,
             topology: topology,
             api_key: apiKey,
             model: model,
-            temperature: tempSlider.value,
+            temperature: parseFloat(tempSlider.value),
             prompt_decon: customPromptDecon.value.trim(),
             prompt_logic: customPromptLogic.value.trim(),
             prompt_critique: customPromptCritique.value.trim(),
-            prompt_synth: customPromptSynth.value.trim()
-        });
+            prompt_synth: customPromptSynth.value.trim(),
+            depth: 5
+        };
 
-        eventSource = new EventSource(`/api/reason?${params.toString()}`);
-
-        eventSource.onmessage = (event) => {
+        (async () => {
             try {
-                const data = JSON.parse(event.data);
-                
-                if (data.event === "step") {
-                    const step = data.step;
-                    
-                    // Update step details in local memory
-                    currentSteps[step.id] = {
-                        id: step.id,
-                        label: step.label,
-                        status: step.status,
-                        output: step.output,
-                        duration: step.duration,
-                        parent_ids: step.parent_ids
-                    };
+                const response = await fetch('/api/reason', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(payload),
+                    signal: signal
+                });
 
-                    vizStatus.innerText = `Agent: ${step.label} (${step.status})`;
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({ detail: response.statusText }));
+                    throw new Error(errorData.detail || `Server returned status ${response.status}`);
+                }
 
-                    // Auto select thinking node
-                    if (step.status === "thinking" || (step.status === "completed" && !selectedNodeId)) {
-                        selectedNodeId = step.id;
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder('utf-8');
+                let buffer = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop(); // Keep the partial line in buffer
+
+                    for (const line of lines) {
+                        const trimmed = line.trim();
+                        if (!trimmed) continue;
+                        if (trimmed.startsWith('data: ')) {
+                            const rawData = trimmed.substring(6);
+                            try {
+                                const data = JSON.parse(rawData);
+                                handleReasoningStreamEvent(data, problem, topology);
+                            } catch (e) {
+                                console.error("Failed to parse stream event JSON:", rawData, e);
+                            }
+                        }
                     }
-
-                    renderGraph();
-                    updateTelemetry();
-                    
-                    // Auto-scroll timeline to active thinking node when its status transitions
-                    if (step.status === "thinking" && lastAutoScrolledId !== step.id) {
-                        lastAutoScrolledId = step.id;
-                        renderTimeline(step.id);
-                    } else {
-                        renderTimeline();
-                    }
-                } else if (data.event === "done") {
-                    cleanupTelemetry();
-                    vizStatus.innerText = "Completed";
-                    vizStatus.className = "viz-status completed";
-                    eventSource.close();
-                    
-                    // Render Final synthesized output
-                    solutionContent.innerHTML = marked.parse(data.final_output);
-                    postProcessMarkdown(solutionContent);
-                    switchTab("solution"); // Auto swap to final output view
-
-                    // Auto select the synthesis node
-                    selectedNodeId = "synthesis";
-                    renderGraph();
-                    renderTimeline("synthesis");
-
-                    // Save session details to backend DB
-                    saveSessionToHistory(problem, topology, data.final_output);
-                    
-                    // Reset UI
-                    enableUI();
-                } else if (data.event === "error") {
-                    cleanupTelemetry();
-                    eventSource.close();
-                    vizStatus.innerText = "Error encountered";
-                    vizStatus.className = "viz-status error";
-                    detailsContent.innerHTML = `<div class="details-placeholder"><i data-lucide="alert-triangle" style="color: var(--accent-rose); width: 48px; height: 48px;"></i><p style="color: var(--accent-rose); margin-top: 10px;">Error: ${data.message}</p></div>`;
-                    lucide.createIcons();
-                    enableUI();
                 }
             } catch (err) {
-                console.error("Failed to parse event message:", err);
+                if (err.name === 'AbortError') {
+                    console.log("Reasoning process cancelled by user.");
+                    return;
+                }
+                console.error("Reasoning Process Failed:", err);
+                cleanupTelemetry();
+                vizStatus.innerText = "Error encountered";
+                vizStatus.className = "viz-status error";
+                detailsContent.innerHTML = `<div class="details-placeholder"><i data-lucide="alert-triangle" style="color: var(--accent-rose); width: 48px; height: 48px;"></i><p style="color: var(--accent-rose); margin-top: 10px;">Error: ${err.message}</p></div>`;
+                lucide.createIcons();
+                enableUI();
             }
-        };
-
-        eventSource.onerror = (err) => {
-            console.error("SSE Connection Failed:", err);
-            cleanupTelemetry();
-            eventSource.close();
-            vizStatus.innerText = "Disconnected";
-            enableUI();
-        };
+        })();
     }
 
     function cleanupTelemetry() {
@@ -607,9 +654,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function cancelReasoningProcess() {
         cleanupTelemetry();
-        if (eventSource) {
-            eventSource.close();
-            eventSource = null;
+        if (abortController) {
+            abortController.abort();
+            abortController = null;
         }
         vizStatus.innerText = "Canceled by User";
         vizStatus.className = "viz-status error";
@@ -621,8 +668,10 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         }
         
-        renderGraph();
-        renderTimeline();
+        updateGraphState();
+        Object.keys(currentSteps).forEach(id => {
+            updateTimelineCard(id);
+        });
         enableUI();
     }
 
@@ -689,6 +738,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 const pathData = `M ${parentX} ${parentY} C ${parentX} ${midY}, ${startX} ${midY}, ${startX} ${startY}`;
 
                 const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                path.setAttribute("id", `link-${parentId}-${id}`);
                 path.setAttribute("d", pathData);
                 path.setAttribute("class", linkClass);
                 path.setAttribute("marker-end", `url(#${markerId})`);
@@ -737,6 +787,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
             const containerDiv = document.createElement("div");
             containerDiv.className = cardClass;
+            containerDiv.setAttribute("id", `node-card-${id}`);
             containerDiv.innerHTML = `
                 <div class="node-inner">
                     <div class="node-icon">
@@ -753,8 +804,8 @@ document.addEventListener("DOMContentLoaded", () => {
             containerDiv.addEventListener("click", (e) => {
                 e.stopPropagation();
                 selectedNodeId = id;
-                renderGraph(); // Trigger redrawing to apply selection style
-                renderTimeline(id);
+                updateNodeSelection();
+                updateTimelineSelection(id);
             });
 
             foreignObject.appendChild(containerDiv);
@@ -766,13 +817,73 @@ document.addEventListener("DOMContentLoaded", () => {
         lucide.createIcons();
     }
 
-    // =====================================================================
-    // Node details viewer
-    // =====================================================================
-    // =====================================================================
-    // Chronological step timeline log rendering (Cognitive Console)
-    // =====================================================================
-    function renderTimeline(focusId = null) {
+    function updateGraphState() {
+        const topology = topologySelect.value;
+        const coords = TOPOLOGY_COORDINATES[topology];
+        if (!coords) return;
+
+        for (const [id, step] of Object.entries(currentSteps)) {
+            const cardEl = document.getElementById(`node-card-${id}`);
+            if (cardEl) {
+                // Update status classes
+                const roleClass = getRoleClass(id);
+                let cardClass = `node-card ${step.status} ${roleClass}`;
+                if (selectedNodeId === id) cardClass += " selected";
+                cardEl.className = cardClass;
+
+                // Update status label
+                const statusEl = cardEl.querySelector(".node-status");
+                if (statusEl) {
+                    let statusLabelText = step.status;
+                    if (step.status === "thinking") {
+                        statusLabelText = "thinking...";
+                    } else if (step.status === "completed") {
+                        statusLabelText = `${step.duration}s`;
+                    }
+                    if (statusEl.innerText !== statusLabelText) {
+                        statusEl.innerText = statusLabelText;
+                    }
+                }
+            }
+
+            // Update links leading to this node
+            step.parent_ids.forEach(parentId => {
+                const linkEl = document.getElementById(`link-${parentId}-${id}`);
+                if (linkEl) {
+                    let linkClass = "svg-edge";
+                    let markerId = "arrow";
+                    
+                    const parent = currentSteps[parentId];
+                    if (parent && parent.status === "completed") {
+                        if (step.status === "thinking") {
+                            linkClass += " active";
+                            markerId = "arrow-active";
+                        } else if (step.status === "completed") {
+                            linkClass += " completed";
+                            markerId = "arrow-completed";
+                        }
+                    }
+                    linkEl.setAttribute("class", linkClass);
+                    linkEl.setAttribute("marker-end", `url(#${markerId})`);
+                }
+            });
+        }
+    }
+
+    function updateNodeSelection() {
+        for (const id of Object.keys(currentSteps)) {
+            const cardEl = document.getElementById(`node-card-${id}`);
+            if (cardEl) {
+                if (selectedNodeId === id) {
+                    cardEl.classList.add("selected");
+                } else {
+                    cardEl.classList.remove("selected");
+                }
+            }
+        }
+    }
+
+    function initTimeline() {
         const topology = topologySelect.value;
         const order = TOPOLOGY_ORDER[topology];
         if (!order) return;
@@ -785,34 +896,17 @@ document.addEventListener("DOMContentLoaded", () => {
 
             const roleClass = getRoleClass(id);
             const isSelected = selectedNodeId === id;
+            const isCollapsed = step.collapsed !== undefined ? step.collapsed : (step.status === "idle");
             
             let cardClass = `timeline-card ${step.status} ${roleClass}`;
             if (isSelected) cardClass += " selected";
-            
-            // By default, idle cards are collapsed
-            const isCollapsed = step.collapsed !== undefined ? step.collapsed : (step.status === "idle");
             if (isCollapsed) cardClass += " collapsed";
-
-            // Status label & metadata
-            let statusText = "";
-            let metaText = "";
-            
-            if (step.status === "idle") {
-                statusText = "Queued";
-            } else if (step.status === "thinking") {
-                statusText = "Running...";
-                metaText = `<span class="animate-spin" style="display:inline-block;"><i data-lucide="loader" style="width:12px; height:12px;"></i></span>`;
-            } else if (step.status === "completed") {
-                statusText = "Completed";
-                const wordCount = step.output ? step.output.trim().split(/\s+/).filter(w => w.length > 0).length : 0;
-                metaText = `<span>${step.duration}s</span><span>•</span><span>${wordCount} words</span>`;
-            }
 
             const iconName = getIconName(id);
 
             html += `
                 <div class="${cardClass}" id="timeline-card-${id}">
-                    <div class="timeline-card-header" data-id="${id}">
+                    <div class="timeline-card-header" id="timeline-card-header-${id}">
                         <div class="timeline-card-title-group">
                             <div class="timeline-card-icon">
                                 <i data-lucide="${iconName}"></i>
@@ -820,27 +914,12 @@ document.addEventListener("DOMContentLoaded", () => {
                             <div class="timeline-card-title">${step.label}</div>
                         </div>
                         <div class="timeline-card-meta">
-                            <span>${statusText}</span>
-                            ${metaText ? `<span>•</span>${metaText}` : ""}
+                            <span class="status-text">Queued</span>
+                            <span class="meta-details"></span>
                         </div>
                     </div>
                     <div class="timeline-card-body">
-            `;
-
-            if (step.status === "thinking" && !step.output) {
-                html += `
-                    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px 0; color: var(--text-secondary);">
-                        <i data-lucide="loader" class="animate-spin" style="color: var(--accent-blue); width:24px; height:24px; margin-bottom:8px;"></i>
-                        <p style="font-style: italic; font-size: 0.8rem;">Agent is initiating reasoning cycle...</p>
-                    </div>
-                `;
-            } else if (step.output) {
-                html += marked.parse(step.output);
-            } else {
-                html += `<p style="color: var(--text-muted); font-style: italic; font-size: 0.8rem;">Awaiting previous agent outputs...</p>`;
-            }
-
-            html += `
+                        <p style="color: var(--text-muted); font-style: italic; font-size: 0.8rem;">Awaiting previous agent outputs...</p>
                     </div>
                 </div>
             `;
@@ -849,14 +928,13 @@ document.addEventListener("DOMContentLoaded", () => {
         html += '</div>';
         
         detailsContent.innerHTML = html;
-        postProcessMarkdown(detailsContent);
         lucide.createIcons();
 
-        // Bind toggle collapse listeners
+        // Bind toggle collapse listeners once
         order.forEach(id => {
             const cardEl = document.getElementById(`timeline-card-${id}`);
             if (cardEl) {
-                const headerEl = cardEl.querySelector(".timeline-card-header");
+                const headerEl = document.getElementById(`timeline-card-header-${id}`);
                 headerEl.addEventListener("click", () => {
                     const step = currentSteps[id];
                     const wasCollapsed = cardEl.classList.contains("collapsed");
@@ -870,24 +948,107 @@ document.addEventListener("DOMContentLoaded", () => {
                 });
             }
         });
+    }
 
-        // Focus & scroll to target card if requested
-        if (focusId) {
-            const targetCard = document.getElementById(`timeline-card-${focusId}`);
-            if (targetCard) {
-                // Ensure card is expanded
-                targetCard.classList.remove("collapsed");
-                const step = currentSteps[focusId];
-                if (step) step.collapsed = false;
-                
-                // Add highlight
-                targetCard.classList.add("highlight-focus");
-                setTimeout(() => {
-                    targetCard.classList.remove("highlight-focus");
-                }, 1500);
+    function updateTimelineCard(id, focus = false) {
+        const step = currentSteps[id];
+        if (!step) return;
 
-                // Scroll into view inside detailsPanel body
-                targetCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        const cardEl = document.getElementById(`timeline-card-${id}`);
+        if (!cardEl) return;
+
+        // Update status class
+        const roleClass = getRoleClass(id);
+        let cardClass = `timeline-card ${step.status} ${roleClass}`;
+        if (selectedNodeId === id) cardClass += " selected";
+        
+        const isCollapsed = step.collapsed !== undefined ? step.collapsed : (step.status === "idle");
+        if (isCollapsed) cardClass += " collapsed";
+        cardEl.className = cardClass;
+
+        // Update status text and meta text
+        const statusTextEl = cardEl.querySelector(".status-text");
+        const metaDetailsEl = cardEl.querySelector(".meta-details");
+        
+        let statusText = "Queued";
+        let metaText = "";
+        
+        if (step.status === "idle") {
+            statusText = "Queued";
+        } else if (step.status === "thinking") {
+            statusText = "Running...";
+            metaText = `• <span class="animate-spin" style="display:inline-block; vertical-align: middle;"><i data-lucide="loader" style="width:12px; height:12px;"></i></span>`;
+        } else if (step.status === "completed") {
+            statusText = "Completed";
+            const wordCount = step.output ? step.output.trim().split(/\s+/).filter(w => w.length > 0).length : 0;
+            metaText = `• <span>${step.duration}s</span> • <span>${wordCount} words</span>`;
+        }
+
+        if (statusTextEl && statusTextEl.innerText !== statusText) {
+            statusTextEl.innerText = statusText;
+        }
+        if (metaDetailsEl) {
+            metaDetailsEl.innerHTML = metaText;
+            if (step.status === "thinking") {
+                lucide.createIcons({ nameAttr: "data-lucide", attrs: {}, parent: metaDetailsEl });
+            }
+        }
+
+        // Update body
+        const bodyEl = cardEl.querySelector(".timeline-card-body");
+        if (bodyEl) {
+            if (step.status === "thinking" && !step.output) {
+                bodyEl.innerHTML = `
+                    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px 0; color: var(--text-secondary);">
+                        <i data-lucide="loader" class="animate-spin" style="color: var(--accent-blue); width:24px; height:24px; margin-bottom:8px;"></i>
+                        <p style="font-style: italic; font-size: 0.8rem;">Agent is initiating reasoning cycle...</p>
+                    </div>
+                `;
+                lucide.createIcons({ parent: bodyEl });
+            } else if (step.output) {
+                if (bodyEl.getAttribute("data-raw") !== step.output) {
+                    bodyEl.innerHTML = marked.parse(step.output);
+                    bodyEl.setAttribute("data-raw", step.output);
+                    postProcessMarkdown(bodyEl);
+                }
+            } else {
+                bodyEl.innerHTML = `<p style="color: var(--text-muted); font-style: italic; font-size: 0.8rem;">Awaiting previous agent outputs...</p>`;
+            }
+        }
+
+        if (focus) {
+            cardEl.classList.remove("collapsed");
+            step.collapsed = false;
+            
+            cardEl.classList.add("highlight-focus");
+            setTimeout(() => {
+                cardEl.classList.remove("highlight-focus");
+            }, 1500);
+
+            cardEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        }
+    }
+
+    function updateTimelineSelection(focusId = null) {
+        for (const id of Object.keys(currentSteps)) {
+            const cardEl = document.getElementById(`timeline-card-${id}`);
+            if (cardEl) {
+                if (selectedNodeId === id) {
+                    cardEl.classList.add("selected");
+                    cardEl.classList.remove("collapsed");
+                    const step = currentSteps[id];
+                    if (step) step.collapsed = false;
+                    
+                    if (focusId === id) {
+                        cardEl.classList.add("highlight-focus");
+                        setTimeout(() => {
+                            cardEl.classList.remove("highlight-focus");
+                        }, 1500);
+                        cardEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+                    }
+                } else {
+                    cardEl.classList.remove("selected");
+                }
             }
         }
     }
@@ -1014,11 +1175,15 @@ document.addEventListener("DOMContentLoaded", () => {
                 dot.draw();
             });
 
-            // Draw line connections between drifting stars
+            // Draw line connections between drifting stars (optimized: avoid Math.hypot inside double loop)
+            const connectionDistSq = connectionDist * connectionDist;
             for (let i = 0; i < dots.length; i++) {
                 for (let j = i + 1; j < dots.length; j++) {
-                    const dist = Math.hypot(dots[i].x - dots[j].x, dots[i].y - dots[j].y);
-                    if (dist < connectionDist) {
+                    const dx = dots[i].x - dots[j].x;
+                    const dy = dots[i].y - dots[j].y;
+                    const distSq = dx * dx + dy * dy;
+                    if (distSq < connectionDistSq) {
+                        const dist = Math.sqrt(distSq);
                         const alpha = (1 - dist / connectionDist) * (isDarkTheme ? 0.15 : 0.08);
                         ctx.strokeStyle = isDarkTheme 
                             ? `rgba(99, 102, 241, ${alpha})` 
@@ -1032,11 +1197,15 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
             }
 
-            // Draw magnetic links to cursor
+            // Draw magnetic links to cursor (optimized: avoid Math.hypot)
             if (mouse.x !== null) {
+                const mouseRadiusSq = mouse.radius * mouse.radius;
                 dots.forEach(dot => {
-                    const dist = Math.hypot(dot.x - mouse.x, dot.y - mouse.y);
-                    if (dist < mouse.radius) {
+                    const dx = dot.x - mouse.x;
+                    const dy = dot.y - mouse.y;
+                    const distSq = dx * dx + dy * dy;
+                    if (distSq < mouseRadiusSq) {
+                        const dist = Math.sqrt(distSq);
                         const alpha = (1 - dist / mouse.radius) * (isDarkTheme ? 0.26 : 0.14);
                         ctx.strokeStyle = isDarkTheme 
                             ? `rgba(6, 182, 212, ${alpha})` 
@@ -1279,7 +1448,7 @@ document.addEventListener("DOMContentLoaded", () => {
         zoomTranslateY = 0;
         applyZoom();
 
-        // Redraw SVG graph & details
+        // Redraw SVG graph
         renderGraph();
         
         // Render Final solution
@@ -1289,8 +1458,14 @@ document.addEventListener("DOMContentLoaded", () => {
         
         // Auto select final node
         selectedNodeId = "synthesis";
-        renderGraph();
-        renderTimeline("synthesis");
+        updateNodeSelection();
+        
+        // Render timeline
+        initTimeline();
+        Object.keys(currentSteps).forEach(id => {
+            updateTimelineCard(id);
+        });
+        updateTimelineSelection("synthesis");
     }
 
     // Redraw on window resize
